@@ -1,4 +1,4 @@
-<!DOCTYPE html><!-- v20260428_tasks_raw_time_final -->
+<!DOCTYPE html><!-- v20260428_google_tasks_exact_rule -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -1040,9 +1040,11 @@ function seedDemo(){
 function isMonthLevelItem(item){
   if(item.monthOnly) return true;
 
-  // 월 헤더 아래 표시 기준:
-  // - Google 일정/할일 모두 해당 월 1일 00:00인 항목만 월 헤더 아래
-  // - 시간대 변환 금지: Google에서 받은 원본 시간 문자열 기준
+  // 구글 할일/일정 공통 규칙:
+  // 1일 00:00 → 월 헤더 아래
+  // 시간 없음 → 시간 표시 안 함
+  // 시간 있음 → 그 시간 그대로 표시
+  // 시간대 변환 절대 금지
   if(item.source==='google' && item.date && item.time === '00:00'){
     const d = parseDs(item.date);
     if(d && d.getDate() === 1) return true;
@@ -1848,24 +1850,23 @@ async function gFetchTasks(){
     for(const t of (tData.items||[])){
       if(!t.due) continue;
 
-      // 중요:
-      // 시간대 변환 금지. Date 객체 변환 사용 금지.
-      // Google에서 온 due 문자열의 날짜/시간 부분을 그대로 사용한다.
+      // 절대 Date 객체로 변환하지 않는다.
+      // Google에서 받은 문자열의 날짜/시간을 그대로 자른다.
       const dueDate = t.due.slice(0,10);
       const rawTime = t.due.includes('T') ? t.due.slice(11,16) : '';
       const dueDay = parseInt(dueDate.slice(8,10), 10);
 
       let dueTime = '';
 
-      if(rawTime && rawTime !== '00:00'){
-        // 사용자가 시간을 입력한 할일: 원본 시간 그대로 표시
-        dueTime = rawTime;
-      } else if(rawTime === '00:00' && dueDay === 1){
-        // 월 헤더 아래로 보내기 위한 기준값
-        // 화면에서는 월 헤더 항목이라 시간은 표시되지 않음
+      if(rawTime === '00:00' && dueDay === 1){
+        // 1. 구글 할일 1일 00:00 → 월 헤더 아래
         dueTime = '00:00';
+      } else if(rawTime && rawTime !== '00:00'){
+        // 3. 구글 할일 시간 있음 → 그 시간 그대로 표시
+        dueTime = rawTime;
       } else {
-        // 시간 미지정 또는 1일이 아닌 00:00은 시간 표시 안 함
+        // 2. 구글 할일 시간 없음 → 시간 표시 안 함
+        // 1일이 아닌 00:00 기본값도 시간 표시 안 함
         dueTime = '';
       }
 
