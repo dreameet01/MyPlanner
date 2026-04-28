@@ -1,4 +1,4 @@
-<!DOCTYPE html><!-- v20260428_github_pages_fixed -->
+<!DOCTYPE html><!-- v20260428_tasks_raw_time_final -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -1041,10 +1041,8 @@ function isMonthLevelItem(item){
   if(item.monthOnly) return true;
 
   // 월 헤더 아래 표시 기준:
-  // 일정 1일 00:00 → 월 헤더 아래
-  // 할일 1일 00:00 → 월 헤더 아래
-  // 할일 1일 13:30 → 1일 일정으로 표시
-  // 할일 1일 종일/시간 없음 → 1일 일정으로 표시
+  // - Google 일정/할일 모두 해당 월 1일 00:00인 항목만 월 헤더 아래
+  // - 시간대 변환 금지: Google에서 받은 원본 시간 문자열 기준
   if(item.source==='google' && item.date && item.time === '00:00'){
     const d = parseDs(item.date);
     if(d && d.getDate() === 1) return true;
@@ -1837,33 +1835,56 @@ async function gFetchTasks(){
   if(!tlRes.ok) throw new Error('Tasks 오류 '+tlRes.status);
   const tlData = await tlRes.json();
   const incoming = [];
+
   for(const list of (tlData.items||[])){
     const tRes = await fetch(
       `https://tasks.googleapis.com/tasks/v1/lists/${list.id}/tasks?showCompleted=true&showHidden=true&maxResults=1000`,
       {headers:{Authorization:`Bearer ${G.token}`}}
     );
     if(!tRes.ok) continue;
+
     const tData = await tRes.json();
+
     for(const t of (tData.items||[])){
       if(!t.due) continue;
-      // t.due 예: "2026-06-01T00:00:00.000Z"
+
+      // 중요:
+      // 시간대 변환 금지. Date 객체 변환 사용 금지.
+      // Google에서 온 due 문자열의 날짜/시간 부분을 그대로 사용한다.
       const dueDate = t.due.slice(0,10);
+      const rawTime = t.due.includes('T') ? t.due.slice(11,16) : '';
+      const dueDay = parseInt(dueDate.slice(8,10), 10);
+
       let dueTime = '';
-      if(t.due.includes('T')){
-        const d = new Date(t.due);
-        const h = String(d.getHours()).padStart(2,'0');
-        const min = String(d.getMinutes()).padStart(2,'0');
-        dueTime = h + ':' + min;
+
+      if(rawTime && rawTime !== '00:00'){
+        // 사용자가 시간을 입력한 할일: 원본 시간 그대로 표시
+        dueTime = rawTime;
+      } else if(rawTime === '00:00' && dueDay === 1){
+        // 월 헤더 아래로 보내기 위한 기준값
+        // 화면에서는 월 헤더 항목이라 시간은 표시되지 않음
+        dueTime = '00:00';
+      } else {
+        // 시간 미지정 또는 1일이 아닌 00:00은 시간 표시 안 함
+        dueTime = '';
       }
-      // 구글 상태를 항상 우선 반영
+
       incoming.push({
-        id:'gtk_'+t.id, gId:t.id, gListId:list.id, type:'task',
-        title:t.title||'', date:dueDate, time:dueTime,
-        note:t.notes||'', done:t.status==='completed', monthOnly:false,
+        id:'gtk_'+t.id,
+        gId:t.id,
+        gListId:list.id,
+        type:'task',
+        title:t.title||'',
+        date:dueDate,
+        time:dueTime,
+        note:t.notes||'',
+        done:t.status==='completed',
+        monthOnly:false,
         source:'google',
       });
     }
   }
+
   S.items = [
     ...S.items.filter(i=>i.source!=='google'||i.type!=='task'),
     ...incoming,
