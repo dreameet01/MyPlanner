@@ -1,4 +1,4 @@
-<!DOCTYPE html><!-- v20260428_105931 -->
+<!DOCTYPE html><!-- v20260428_github_pages_fixed -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -1040,14 +1040,11 @@ function seedDemo(){
 function isMonthLevelItem(item){
   if(item.monthOnly) return true;
 
-  // Google 연동 항목 중 "매월 헤더 아래"로 올릴 대상은 딱 하나:
-  // 일정/할일 구분 없이 해당 월 1일 00:00으로 들어온 항목만.
-  //
-  // 예)
+  // 월 헤더 아래 표시 기준:
   // 일정 1일 00:00 → 월 헤더 아래
   // 할일 1일 00:00 → 월 헤더 아래
-  // 할일 1일 13:30 → 1일 날짜 아래
-  // 할일 1일 종일/시간 없음 → 1일 날짜 아래
+  // 할일 1일 13:30 → 1일 일정으로 표시
+  // 할일 1일 종일/시간 없음 → 1일 일정으로 표시
   if(item.source==='google' && item.date && item.time === '00:00'){
     const d = parseDs(item.date);
     if(d && d.getDate() === 1) return true;
@@ -1747,7 +1744,7 @@ function renderAcctPanel(){
 
 function gLogin(){
   if(!GOOGLE_CLIENT_ID){ showToast('Client ID를 먼저 설정해주세요'); return; }
-  const redirectUri = 'https://klugohplanner.netlify.app';
+  const redirectUri = 'https://dreameet01.github.io/MyPlanner/';
   const params = new URLSearchParams({
     client_id: GOOGLE_CLIENT_ID,
     redirect_uri: redirectUri,
