@@ -1039,17 +1039,12 @@ function seedDemo(){
 // ── ITEMS ──
 function isMonthLevelItem(item){
   if(item.monthOnly) return true;
-
-  // 구글 할일/일정 공통 규칙:
-  // 1일 00:00 → 월 헤더 아래
-  // 시간 없음 → 시간 표시 안 함
-  // 시간 있음 → 그 시간 그대로 표시
-  // 시간대 변환 절대 금지
-  if(item.source==='google' && item.date && item.time === '00:00'){
+  // 일정만: 1일 00:00 → 월 헤더 아래
+  // 할일은 절대 월 헤더 아래 안 감
+  if(item.source==='google' && item.type==='event' && item.date && item.time==='00:00'){
     const d = parseDs(item.date);
-    if(d && d.getDate() === 1) return true;
+    if(d && d.getDate()===1) return true;
   }
-
   return false;
 }
 
@@ -1849,27 +1844,8 @@ async function gFetchTasks(){
 
     for(const t of (tData.items||[])){
       if(!t.due) continue;
-
-      // 절대 Date 객체로 변환하지 않는다.
-      // Google에서 받은 문자열의 날짜/시간을 그대로 자른다.
       const dueDate = t.due.slice(0,10);
-      const rawTime = t.due.includes('T') ? t.due.slice(11,16) : '';
-      const dueDay = parseInt(dueDate.slice(8,10), 10);
-
-      let dueTime = '';
-
-      if(rawTime === '00:00' && dueDay === 1){
-        // 1. 구글 할일 1일 00:00 → 월 헤더 아래
-        dueTime = '00:00';
-      } else if(rawTime && rawTime !== '00:00'){
-        // 3. 구글 할일 시간 있음 → 그 시간 그대로 표시
-        dueTime = rawTime;
-      } else {
-        // 2. 구글 할일 시간 없음 → 시간 표시 안 함
-        // 1일이 아닌 00:00 기본값도 시간 표시 안 함
-        dueTime = '';
-      }
-
+      // 할일은 시간 표시 없음 - 무조건 해당 날짜에만 표시
       incoming.push({
         id:'gtk_'+t.id,
         gId:t.id,
@@ -1877,7 +1853,7 @@ async function gFetchTasks(){
         type:'task',
         title:t.title||'',
         date:dueDate,
-        time:dueTime,
+        time:'',
         note:t.notes||'',
         done:t.status==='completed',
         monthOnly:false,
