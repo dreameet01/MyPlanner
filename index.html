@@ -1701,6 +1701,47 @@ let G = {
 
 function isGConnected(){ return !!(G.token && Date.now() < G.expiry); }
 
+// 토큰 만료 10분 전에 자동 갱신
+function gScheduleRefresh(){
+  const remaining = G.expiry - Date.now() - 10*60*1000; // 만료 10분 전
+  if(remaining <= 0) return;
+  setTimeout(()=>{
+    if(!isGConnected()) return;
+    // silent re-login via hidden iframe approach
+    const redirectUri = 'https://dreameet01.github.io/MyPlanner/';
+    const params = new URLSearchParams({
+      client_id: GOOGLE_CLIENT_ID,
+      redirect_uri: redirectUri,
+      response_type: 'token',
+      scope: GOOGLE_SCOPES,
+      prompt: 'none', // silent - no UI shown
+      login_hint: G.email,
+    });
+    // Use iframe for silent refresh
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.src = 'https://accounts.google.com/o/oauth2/v2/auth?' + params;
+    iframe.onload = ()=>{
+      try {
+        const hash = iframe.contentWindow.location.hash.slice(1);
+        const p = new URLSearchParams(hash);
+        const token = p.get('access_token');
+        const expiresIn = parseInt(p.get('expires_in')||'3600');
+        if(token){
+          G.token = token;
+          G.expiry = Date.now() + expiresIn*1000;
+          localStorage.setItem('g_token', token);
+          localStorage.setItem('g_expiry', G.expiry);
+          renderAcctPanel();
+          gScheduleRefresh();
+        }
+      } catch(e){}
+      document.body.removeChild(iframe);
+    };
+    document.body.appendChild(iframe);
+  }, remaining);
+}
+
 function toggleAcctPanel(){
   document.getElementById('acctPanel').classList.toggle('open');
   renderAcctPanel();
@@ -1764,6 +1805,8 @@ function gHandleRedirect(){
   localStorage.setItem('g_expiry', G.expiry);
   // clean URL
   history.replaceState(null,'',location.pathname+location.search);
+  // schedule auto refresh
+  gScheduleRefresh();
   // fetch email
   fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
     headers:{Authorization:`Bearer ${token}`}
@@ -1819,10 +1862,29 @@ async function gFetchCalendar(){
     note:e.description||'', done:false, monthOnly:false,
     source:'google',
   })).filter(e=>e.date);
-  // merge: keep local-only items, replace google ones
+  // 기존 이벤트 순서 맵
+  const existingEvtOrderMap = {};
+  let maxEvtOrder = -1;
+  S.items.filter(i=>i.source==='google'&&i.type==='event').forEach(i=>{
+    if(i.gId){
+      existingEvtOrderMap[i.gId] = i.manualOrder!=null ? i.manualOrder : null;
+      if(i.manualOrder!=null && i.manualOrder > maxEvtOrder) maxEvtOrder = i.manualOrder;
+    }
+  });
+
+  const mergedEvents = incoming.map(newItem=>{
+    if(existingEvtOrderMap[newItem.gId] != null){
+      newItem.manualOrder = existingEvtOrderMap[newItem.gId];
+    } else {
+      maxEvtOrder++;
+      newItem.manualOrder = maxEvtOrder;
+    }
+    return newItem;
+  });
+
   S.items = [
     ...S.items.filter(i=>i.source!=='google'||i.type!=='event'),
-    ...incoming,
+    ...mergedEvents,
   ];
 }
 
@@ -1862,9 +1924,32 @@ async function gFetchTasks(){
     }
   }
 
+  // 기존 항목 순서 맵 (gId → manualOrder)
+  const existingOrderMap = {};
+  let maxOrder = -1;
+  S.items.filter(i=>i.source==='google'&&i.type==='task').forEach(i=>{
+    if(i.gId){
+      existingOrderMap[i.gId] = i.manualOrder!=null ? i.manualOrder : null;
+      if(i.manualOrder!=null && i.manualOrder > maxOrder) maxOrder = i.manualOrder;
+    }
+  });
+
+  // 새 항목은 맨 뒤에 순서 부여
+  const mergedItems = incoming.map(newItem=>{
+    if(existingOrderMap[newItem.gId] != null){
+      // 기존 항목 - 내가 설정한 순서 유지
+      newItem.manualOrder = existingOrderMap[newItem.gId];
+    } else {
+      // 새 항목 - 맨 뒤에 추가
+      maxOrder++;
+      newItem.manualOrder = maxOrder;
+    }
+    return newItem;
+  });
+
   S.items = [
     ...S.items.filter(i=>i.source!=='google'||i.type!=='task'),
-    ...incoming,
+    ...mergedItems,
   ];
 }
 
@@ -2030,6 +2115,8 @@ window.addEventListener('load', function() {
   applyTheme(currentTheme);
   buildThemePanel();
   renderAcctPanel();
+  // schedule token refresh if already logged in
+  if(isGConnected()) gScheduleRefresh();
   gHandleRedirect();
   renderList(true);
   // auto-sync every 5 minutes if connected
