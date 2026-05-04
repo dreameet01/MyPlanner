@@ -340,6 +340,7 @@ body {
 }
 .type-sel-btn:last-child { border-right:none; }
 .type-sel-btn.active { background:var(--surface2); color:var(--text); }
+.type-sel-btn:disabled { opacity:0.35; cursor:not-allowed; }
 .type-icon { width:13px; height:13px; }
 .type-icon-event { border:1.5px solid var(--cb-event); border-radius:3px; }
 .type-icon-task { border:1.5px solid var(--cb-task); border-radius:50%; }
@@ -357,6 +358,9 @@ body {
 }
 .form-input:focus { border-color:var(--border2); }
 .form-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.date-time-row { align-items:stretch; }
+.date-time-row > div { display:flex; }
+.date-time-input { height:54px; min-height:54px; line-height:54px; padding-top:0; padding-bottom:0; display:block; }
 .date-mode-toggle {
   display:flex; margin-bottom:10px;
   border:1px solid var(--border2); border-radius:7px; overflow:hidden;
@@ -386,19 +390,7 @@ body {
   color:var(--text2); cursor:pointer; text-align:center; transition:all 0.12s;
 }
 .repeat-btn.active { background:var(--surface2); color:var(--text); border-color:var(--border2); font-weight:600; }
-.lunar-toggle {
-  display:flex; margin-top:8px;
-  border:1px solid var(--border2); border-radius:6px; overflow:hidden;
-}
-.lunar-btn {
-  flex:1; padding:7px; background:none; border:none;
-  border-right:1px solid var(--border2);
-  font-family:'DM Mono',monospace; font-size:10px;
-  color:var(--text2); cursor:pointer; transition:all 0.12s;
-}
-.lunar-btn:last-child { border-right:none; }
-.lunar-btn.active { background:var(--surface2); color:var(--text); font-weight:600; }
-
+.repeat-btn:disabled { opacity:0.35; cursor:not-allowed; }
 /* ─── CALENDAR ─── */
 .cal-wrap { padding:0 14px 12px; }
 .cal-grid {
@@ -839,7 +831,7 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
   <div class="search-results" id="searchResults"></div>
 </div>
 
-<!-- FAB - only for Memo tab -->
+<!-- FAB: List/Cal/Year = Add schedule/task, Memo = New memo -->
 <button class="fab hidden" id="fabBtn" onclick="onFab()">+</button>
 
 <!-- MODAL -->
@@ -867,12 +859,9 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
         <button class="date-mode-btn active" id="btnDateExact" onclick="setDateMode('exact')">날짜 지정</button>
         <button class="date-mode-btn" id="btnDateMonth" onclick="setDateMode('month')">이달 중에</button>
       </div>
-      <div id="exactDateRow" class="form-row">
-        <div><input class="form-input" type="date" id="inputDate"></div>
-        <div>
-          <label class="form-label">Time</label>
-          <input class="form-input" type="time" id="inputTime">
-        </div>
+      <div id="exactDateRow" class="form-row date-time-row">
+        <div><input class="form-input date-time-input" type="date" id="inputDate"></div>
+        <div><input class="form-input date-time-input" type="time" id="inputTime"></div>
       </div>
       <div id="monthOnlyRow" class="hidden">
         <input class="form-input" type="month" id="inputMonth">
@@ -887,8 +876,7 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
       <div class="repeat-grid">
         <button class="repeat-btn active" id="rep-none" onclick="setRepeat('none')">없음</button>
         <button class="repeat-btn" id="rep-monthly" onclick="setRepeat('monthly')">매월</button>
-        <button class="repeat-btn" id="rep-yearly" onclick="setRepeat('yearly')">양력 매년</button>
-        <button class="repeat-btn" id="rep-lunar" onclick="setRepeat('lunar')">음력 매년</button>
+        <button class="repeat-btn" id="rep-yearly" onclick="setRepeat('yearly')">매년</button>
       </div>
     </div>
     <button class="form-submit" onclick="saveItem()">Save</button>
@@ -933,12 +921,12 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
       <div class="repeat-grid">
         <button class="repeat-btn active" id="erep-none" onclick="setEditRepeat('none')">없음</button>
         <button class="repeat-btn" id="erep-monthly" onclick="setEditRepeat('monthly')">매월</button>
-        <button class="repeat-btn" id="erep-yearly" onclick="setEditRepeat('yearly')">양력 매년</button>
-        <button class="repeat-btn" id="erep-lunar" onclick="setEditRepeat('lunar')">음력 매년</button>
+        <button class="repeat-btn" id="erep-yearly" onclick="setEditRepeat('yearly')">매년</button>
       </div>
     </div>
     <div style="display:flex;gap:8px;margin-top:4px">
-      <button class="form-submit" style="flex:1" onclick="saveEditItem()">Save</button>
+      <button class="form-submit" style="background:var(--sun);flex:1" onclick="deleteEditItem()">Delete</button>
+      <button class="form-submit" style="flex:2" onclick="saveEditItem()">Save</button>
     </div>
   </div>
 </div>
@@ -991,7 +979,7 @@ const TODAY = new Date();
 const TODAYSTR = fmtDs(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate());
 
 let S = {
-  items:[], memos:[],
+  items:[], memos:[], orderMap:{},
   curView:'list',
   listYear:TODAY.getFullYear(),
   calYear:TODAY.getFullYear(), calMonth:TODAY.getMonth(),
@@ -1013,7 +1001,7 @@ function nowLabel(){
   return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')} ${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}`;
 }
 
-function save(){ try{localStorage.setItem('pl_items',JSON.stringify(S.items)); localStorage.setItem('pl_memos',JSON.stringify(S.memos));}catch(e){} }
+function save(){ try{localStorage.setItem('pl_items',JSON.stringify(S.items)); localStorage.setItem('pl_memos',JSON.stringify(S.memos)); localStorage.setItem('pl_orderMap',JSON.stringify(S.orderMap||{}));}catch(e){} }
 function load(){
   try{
     // version check - clear old demo data on upgrade
@@ -1023,8 +1011,11 @@ function load(){
       localStorage.removeItem('pl_memos');
       localStorage.setItem('pl_ver','2');
     }
-    const it=JSON.parse(localStorage.getItem('pl_items')); if(Array.isArray(it))S.items=it;
+    const it=JSON.parse(localStorage.getItem('pl_items')); if(Array.isArray(it)){
+      S.items=it.map(item=> item && item.repeat==='lunar' ? {...item, repeat:'yearly'} : item);
+    }
     const me=JSON.parse(localStorage.getItem('pl_memos')); if(Array.isArray(me))S.memos=me;
+    const om=JSON.parse(localStorage.getItem('pl_orderMap')); if(om&&typeof om==='object')S.orderMap=om;
   }catch(e){}
 }
 
@@ -1036,14 +1027,59 @@ function seedDemo(){
 }
 
 // ── ITEMS ──
+const MONTH_TAG = '[이달]';
+function hasMonthTag(title){ return (title||'').includes(MONTH_TAG); }
+function stripMonthTag(title){ return (title||'').replace(MONTH_TAG,'').trim(); }
+function monthKeyFromDate(dateStr){ return dateStr ? dateStr.slice(0,7) : ''; }
+function firstDayOfMonth(monthStr){
+  const [y,m] = monthStr.split('-').map(Number);
+  if(!y||!m) return monthStr;
+  return `${y}-${String(m).padStart(2,'0')}-01`;
+}
+function nextDayStr(dateStr){
+  const d = parseDs(dateStr);
+  if(!d) return dateStr;
+  d.setDate(d.getDate()+1);
+  return fmtDs(d.getFullYear(), d.getMonth(), d.getDate());
+}
+function addMinutesToLocalDateTime(dateStr, timeStr, minutes){
+  const [h,mi] = (timeStr||'00:00').split(':').map(Number);
+  const d = parseDs(dateStr);
+  if(!d) return dateStr + 'T' + timeStr + ':00';
+  d.setHours(h||0, mi||0, 0, 0);
+  d.setMinutes(d.getMinutes() + minutes);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:00`;
+}
+function recurrenceForRepeat(item){
+  if(!item || !item.repeat || item.repeat==='none') return null;
+  if(item.repeat==='monthly') return ['RRULE:FREQ=MONTHLY'];
+  if(item.repeat==='yearly') return ['RRULE:FREQ=YEARLY'];
+  return null;
+}
+function makeIncomingOrderAllocator(){
+  const cursor = {};
+  return function(date){
+    if(cursor[date] == null){
+      const vals = Object.entries(S.orderMap||{})
+        .filter(([k])=>k.startsWith(date+'|'))
+        .map(([,v])=>v)
+        .filter(v=>Number.isFinite(v));
+      cursor[date] = vals.length ? Math.max(...vals)+1 : 0;
+    }
+    return cursor[date]++;
+  };
+}
+function isMonthTaggedGoogleEvent(item){
+  if(!(item && item.source==='google' && item.type==='event' && item.date && item.time==='00:00')) return false;
+  const d = parseDs(item.date);
+  return !!(d && d.getDate()===1 && hasMonthTag(item.rawTitle || item.title));
+}
 function isMonthLevelItem(item){
   if(item.monthOnly) return true;
-  // 일정만: 1일 00:00 → 월 헤더 아래
+  // Google에서 직접 만든 월 단위 항목 규칙:
+  // 1일 00:00 + 제목에 [이달] 포함 → 월 헤더 아래 표시
   // 할일은 절대 월 헤더 아래 안 감
-  if(item.source==='google' && item.type==='event' && item.date && item.time==='00:00'){
-    const d = parseDs(item.date);
-    if(d && d.getDate()===1) return true;
-  }
+  if(isMonthTaggedGoogleEvent(item)) return true;
   return false;
 }
 
@@ -1057,22 +1093,86 @@ function getMonthItems(y,m){
     return false;
   });
 }
+function itemStableKey(item){
+  if(item.gId) return `${item.source||'google'}:${item.type}:${item.gId}`;
+  return `local:${item.id}`;
+}
+function itemOrderMapKey(item, dateOverride){
+  return `${dateOverride||item.date}|${itemStableKey(item)}`;
+}
+function getSavedOrder(item, dateOverride){
+  const key = itemOrderMapKey(item, dateOverride);
+  const v = S.orderMap ? S.orderMap[key] : undefined;
+  return Number.isFinite(v) ? v : null;
+}
+function setSavedOrder(item, order, dateOverride){
+  if(!S.orderMap) S.orderMap = {};
+  S.orderMap[itemOrderMapKey(item, dateOverride)] = order;
+  item.manualOrder = order;
+}
+function defaultItemCompare(a,b){
+  if(a.type!==b.type) return a.type==='event' ? -1 : 1;
+  const at=a.time||'', bt=b.time||'';
+  if(at&&!bt) return -1; if(!at&&bt) return 1;
+  const tc = at.localeCompare(bt);
+  if(tc) return tc;
+  return (a.title||'').localeCompare(b.title||'');
+}
+function itemCompare(a,b){
+  const da = a.date || '', db = b.date || '';
+  const dc = da.localeCompare(db);
+  if(dc) return dc;
+  const ao = getSavedOrder(a), bo = getSavedOrder(b);
+  if(ao!=null && bo!=null) return ao-bo;
+  if(ao!=null) return -1;
+  if(bo!=null) return 1;
+  if(a.manualOrder!=null && b.manualOrder!=null) return a.manualOrder-b.manualOrder;
+  if(a.manualOrder!=null) return -1;
+  if(b.manualOrder!=null) return 1;
+  return defaultItemCompare(a,b);
+}
+function persistOrderForDate(date){
+  const arr = S.items.filter(i=>!isMonthLevelItem(i) && i.date===date).sort((a,b)=>{
+    const ai = S.items.indexOf(a), bi = S.items.indexOf(b);
+    return ai-bi;
+  });
+  arr.forEach((i,idx)=>setSavedOrder(i,idx,date));
+}
+function nextOrderForDate(date){
+  const vals = S.items.filter(i=>!isMonthLevelItem(i)&&i.date===date)
+    .map(i=>getSavedOrder(i,date))
+    .filter(v=>v!=null);
+  return vals.length ? Math.max(...vals)+1 : 0;
+}
 function getDayItems(y,m){
   const p=fmtMo(y,m);
-  return S.items.filter(i=>!isMonthLevelItem(i)&&i.date&&i.date.startsWith(p))
-    .sort((a,b)=>a.date.localeCompare(b.date)||(a.time||'zz').localeCompare(b.time||'zz'));
+  return S.items.filter(i=>!isMonthLevelItem(i)&&i.date&&i.date.startsWith(p)).sort(itemCompare);
 }
-function getForDate(ds){ return S.items.filter(i=>!isMonthLevelItem(i)&&i.date===ds).sort((a,b)=>(a.time||'zz').localeCompare(b.time||'zz')); }
+function getForDate(ds){ return S.items.filter(i=>!isMonthLevelItem(i)&&i.date===ds).sort(itemCompare); }
 
 function toggleDone(id,e){
   e&&e.stopPropagation();
   const it=S.items.find(i=>i.id===id); if(!it)return;
-  it.done=!it.done; save();
-  // push to Google
-  if(isGConnected() && it.gId){
-    if(it.type==='task') gPatchTask(it);
-    // events don't have done status in Google, skip
+  it.done=!it.done;
+  if(it.type==='task' && it.gId) it.pendingDoneSync = true;
+  save();
+  // push to Google Tasks. If token expired, silently refresh first.
+  // If silent refresh fails, keep pendingDoneSync=true and push it on next login/sync.
+  if(it.type==='task' && it.gId){
+    gEnsureConnected().then(async ok=>{
+      if(!ok){ showToast('체크 저장됨 · 구글은 로그인 후 반영'); return; }
+      const pushed = await gPatchTask(it);
+      if(pushed){
+        it.pendingDoneSync = false;
+        save();
+      } else {
+        it.pendingDoneSync = true;
+        save();
+        showToast('체크 저장됨 · 다음 동기화 때 재시도');
+      }
+    });
   }
+  // events don't have done status in Google, so event check is local-only.
   // update in place
   const row=e?.target?.closest('.item-row');
   if(row){
@@ -1092,8 +1192,13 @@ function renderAllPreserveScroll(){
 function toggleDetail(id){ document.getElementById('detail_'+id)?.classList.toggle('open'); }
 function confirmDelete(id){
   if(confirm('삭제할까요?')){
+    const item = S.items.find(i=>i.id===id);
+    if(item && isGConnected() && item.gId){
+      if(item.type==='event') gDeleteEvent(item.gId);
+      else gDeleteTask(item.gId, item.gListId);
+    }
     S.items=S.items.filter(i=>i.id!==id);
-    save();renderAll();showToast('Deleted (로컬에서만 삭제됨)');
+    save();renderAll();showToast('Deleted');
   }
 }
 
@@ -1125,7 +1230,7 @@ function makeItemRow(item){
   const ts=document.createElement('span'); ts.className='item-title-text'; ts.textContent=item.title;
   line.appendChild(ts);
 
-  const REPEAT_LABELS={'monthly':'매월','yearly':'양력매년','lunar':'음력매년'};
+  const REPEAT_LABELS={'monthly':'매월','yearly':'매년'};
   if(item.repeat && item.repeat!=='none' && REPEAT_LABELS[item.repeat]){
     const tag=document.createElement('span'); tag.className='item-repeat-tag';
     tag.textContent=REPEAT_LABELS[item.repeat]; line.appendChild(tag);
@@ -1143,6 +1248,14 @@ function makeItemRow(item){
     if(item.note) toggleDetail(item.id);
   };
   row.appendChild(main);
+
+  const more=document.createElement('button');
+  more.className='more-btn';
+  more.type='button';
+  more.textContent='⋯';
+  more.title='수정';
+  more.onclick=e=>{ e.stopPropagation(); openEditModal(item.id); };
+  row.appendChild(more);
 
   // drag events for reorder across any date
   row.addEventListener('dragstart',e=>{
@@ -1173,10 +1286,17 @@ function makeItemRow(item){
     if(fromId===item.id) return;
     const fromItem=S.items.find(i=>i.id===fromId);
     if(!fromItem) return;
+    if(fromItem.type==='task' && isMonthLevelItem(item)){
+      showToast('할일은 월헤더로 이동할 수 없어요');
+      return;
+    }
 
     // move to this item's date
+    const oldDate = fromItem.date;
+    const oldMonthOnly = !!fromItem.monthOnly;
     fromItem.date=item.date;
     fromItem.monthOnly=isMonthLevelItem(item)||false;
+    const dateChanged = oldDate !== fromItem.date || oldMonthOnly !== !!fromItem.monthOnly;
 
     // determine insert position in S.items
     const rect=row.getBoundingClientRect();
@@ -1188,11 +1308,11 @@ function makeItemRow(item){
     const targetIdx=S.items.findIndex(i=>i.id===item.id);
     S.items.splice(targetIdx+(after?1:0),0,fromItem);
 
-    // assign manualOrder for items on this date
-    let order=0;
-    S.items.filter(i=>i.date===item.date&&!i.monthOnly).forEach(i=>{ i.manualOrder=order++; });
+    // 사용자가 웹앱에서 정한 순서는 로컬에 영구 저장하고, 동기화로 덮어쓰지 않음
+    persistOrderForDate(item.date);
 
     save(); renderAll();
+    if(dateChanged) gPushDateChange(fromItem);
   });
 
   // no long-press delete - data managed in Google Calendar
@@ -1215,10 +1335,13 @@ function makeDayBlock(dateStr,items){
     e.preventDefault(); hdr.style.background='';
     const fromId=e.dataTransfer.getData('text/plain');
     const fromItem=S.items.find(i=>i.id===fromId); if(!fromItem) return;
+    const oldDate = fromItem.date;
+    const oldMonthOnly = !!fromItem.monthOnly;
     fromItem.date=dateStr; fromItem.monthOnly=false;
-    // clear manualOrder so it slots in by default sort
-    delete fromItem.manualOrder;
+    const dateChanged = oldDate !== fromItem.date || oldMonthOnly !== !!fromItem.monthOnly;
+    setSavedOrder(fromItem, nextOrderForDate(dateStr), dateStr);
     save(); renderAll();
+    if(dateChanged) gPushDateChange(fromItem);
   });
 
   block.appendChild(hdr);
@@ -1229,7 +1352,47 @@ function makeDayBlock(dateStr,items){
 }
 
 // ── LIST ──
+function getRelevantListTarget(){
+  const todayTime = parseDs(TODAYSTR).getTime();
+  const candidates = S.items
+    .filter(i=>i.date)
+    .map(i=>{
+      const ds = i.monthOnly && i.date.length===7 ? i.date + '-01' : i.date;
+      const d = parseDs(ds);
+      if(!d) return null;
+      return { ds, time:d.getTime(), monthOnly:!!i.monthOnly };
+    })
+    .filter(Boolean);
+
+  if(candidates.some(c=>c.ds===TODAYSTR)) return { ds:TODAYSTR, year:TODAY.getFullYear(), month:TODAY.getMonth(), exact:true };
+
+  const future = candidates.filter(c=>c.time>=todayTime).sort((a,b)=>a.time-b.time)[0];
+  const past = candidates.filter(c=>c.time<todayTime).sort((a,b)=>b.time-a.time)[0];
+  const chosen = future || past;
+  if(chosen){
+    const d=parseDs(chosen.ds);
+    return { ds:chosen.ds, year:d.getFullYear(), month:d.getMonth(), exact:!chosen.monthOnly };
+  }
+  return { ds:TODAYSTR, year:TODAY.getFullYear(), month:TODAY.getMonth(), exact:false };
+}
+
+function scrollToRelevantListTarget(){
+  const target = getRelevantListTarget();
+  if(!target) return;
+  const dayEl = target.exact ? document.getElementById('day_'+target.ds) : null;
+  if(dayEl){
+    dayEl.scrollIntoView({behavior:'auto', block:'start'});
+    return;
+  }
+  const monthEl = document.getElementById(`month_${target.year}_${target.month}`);
+  if(monthEl) monthEl.scrollIntoView({behavior:'auto', block:'start'});
+}
+
 function renderList(autoScroll){
+  if(autoScroll!==false){
+    const target = getRelevantListTarget();
+    if(target && target.year !== S.listYear) S.listYear = target.year;
+  }
   document.getElementById('listYearLabel').textContent=S.listYear;
   const lc=document.getElementById('listContent');
   lc.innerHTML='';
@@ -1255,16 +1418,7 @@ function renderList(autoScroll){
       dayItems.forEach(i=>{if(!byDate[i.date])byDate[i.date]=[];byDate[i.date].push(i);});
       // sort: if manualOrder set use that, else events first → timed → untimed
       Object.keys(byDate).sort().forEach(ds=>{
-        byDate[ds].sort((a,b)=>{
-          if(a.manualOrder!=null && b.manualOrder!=null) return a.manualOrder-b.manualOrder;
-          if(a.manualOrder!=null) return -1;
-          if(b.manualOrder!=null) return 1;
-          // default: event first, then by time
-          if(a.type!==b.type) return a.type==='event'?-1:1;
-          const at=a.time||'', bt=b.time||'';
-          if(at&&!bt) return -1; if(!at&&bt) return 1;
-          return at.localeCompare(bt);
-        });
+byDate[ds].sort(itemCompare);
         block.appendChild(makeDayBlock(ds,byDate[ds]));
       });
     }
@@ -1273,15 +1427,10 @@ function renderList(autoScroll){
 
   // auto-scroll only on first load or explicit request
   if(autoScroll!==false){
-    requestAnimationFrame(()=>{
-      const todayMonth=document.getElementById(`month_${TODAY.getFullYear()}_${TODAY.getMonth()}`);
-      if(todayMonth && S.listYear===TODAY.getFullYear()){
-        todayMonth.scrollIntoView({behavior:'auto', block:'start'});
-      }
-    });
+    requestAnimationFrame(scrollToRelevantListTarget);
   }
 }
-function changeListYear(d){ S.listYear+=d; renderList(); }
+function changeListYear(d){ S.listYear+=d; renderList(false); }
 
 // ── CAL ──
 function renderCal(){
@@ -1330,6 +1479,29 @@ function changeCalMonth(d){
   S.calMonth+=d;
   if(S.calMonth<0){S.calMonth=11;S.calYear--;} if(S.calMonth>11){S.calMonth=0;S.calYear++;}
   renderCal();
+}
+
+function initCalSwipe(){
+  const el = document.getElementById('viewCal');
+  if(!el || el.dataset.swipeReady==='1') return;
+  el.dataset.swipeReady = '1';
+  let sx=0, sy=0, st=0;
+  el.addEventListener('touchstart', e=>{
+    if(!e.touches || e.touches.length!==1) return;
+    const t=e.touches[0];
+    sx=t.clientX; sy=t.clientY; st=Date.now();
+  }, {passive:true});
+  el.addEventListener('touchend', e=>{
+    if(document.querySelector('.modal-overlay.open')) return;
+    const t=e.changedTouches && e.changedTouches[0];
+    if(!t) return;
+    const dx=t.clientX-sx, dy=t.clientY-sy;
+    const elapsed=Date.now()-st;
+    if(elapsed>900) return;
+    if(Math.abs(dx)<55 || Math.abs(dx)<Math.abs(dy)*1.35) return;
+    if(dx<0) changeCalMonth(1);
+    else changeCalMonth(-1);
+  }, {passive:true});
 }
 
 // ── YEAR ──
@@ -1487,8 +1659,13 @@ function setTextColor(color){
 // ── REPEAT ──
 let currentRepeat = 'none';
 function setRepeat(r){
+  // Google Tasks 반복 연동은 불안정하므로 반복은 일정에만 허용
+  if(S.newType === 'task' && r !== 'none'){
+    showToast('반복은 일정에서만 사용할 수 있어요');
+    r = 'none';
+  }
   currentRepeat=r;
-  ['none','monthly','yearly','lunar'].forEach(id=>{
+  ['none','monthly','yearly'].forEach(id=>{
     document.getElementById('rep-'+id)?.classList.toggle('active',id===r);
   });
 }
@@ -1499,7 +1676,7 @@ function toggleSearch(){
   const bar=document.getElementById('searchBar');
   if(!bar.classList.contains('open')){
     prevView=S.curView==='search'?'list':S.curView;
-    bar.classList.add('open'); showViewEl('search'); doSearch('');
+    bar.classList.add('open'); showViewEl('search'); document.getElementById('fabBtn').classList.add('hidden'); doSearch('');
     setTimeout(()=>document.getElementById('searchInput').focus(),80);
   } else closeSearch();
 }
@@ -1539,8 +1716,8 @@ function showViewEl(v){
 function switchView(v){
   S.curView=v; showViewEl(v);
   document.querySelectorAll('.view-tab').forEach((t,i)=>t.classList.toggle('active',['list','cal','year','memo'][i]===v));
-  // FAB only visible on Memo tab
-  document.getElementById('fabBtn').classList.toggle('hidden', v!=='memo');
+  // FAB visible on main views: Memo creates memo, other views create schedule/task
+  document.getElementById('fabBtn').classList.toggle('hidden', v==='search');
   if(v==='list'){renderList(true);}
   else if(v==='cal')renderCal();
   else if(v==='year')renderYear();
@@ -1571,17 +1748,34 @@ function openModal(){
 }
 function closeModal(){document.getElementById('modalOverlay').classList.remove('open');}
 function closeModalOutside(e){if(e.target===document.getElementById('modalOverlay'))closeModal();}
+function updateRepeatAvailability(){
+  const disableRepeat = S.newType === 'task';
+  ['monthly','yearly'].forEach(id=>{
+    const btn = document.getElementById('rep-'+id);
+    if(btn) btn.disabled = disableRepeat;
+  });
+  if(disableRepeat && currentRepeat !== 'none') setRepeat('none');
+}
 function setType(t){
+  // '이달 중에'는 Google Tasks와 안정적으로 맞지 않아서 일정만 허용
+  if(S.dateMode==='month' && t==='task'){
+    showToast('이달 중에는 일정만 저장돼요');
+    t='event';
+  }
   S.newType=t;
   document.getElementById('btnEvent').classList.toggle('active',t==='event');
   document.getElementById('btnTask').classList.toggle('active',t==='task');
+  updateRepeatAvailability();
 }
 function setDateMode(mode){
   S.dateMode=mode;
+  const isMonth = mode==='month';
   document.getElementById('btnDateExact').classList.toggle('active',mode==='exact');
-  document.getElementById('btnDateMonth').classList.toggle('active',mode==='month');
-  document.getElementById('exactDateRow').classList.toggle('hidden',mode==='month');
-  document.getElementById('monthOnlyRow').classList.toggle('hidden',mode==='exact');
+  document.getElementById('btnDateMonth').classList.toggle('active',isMonth);
+  document.getElementById('exactDateRow').classList.toggle('hidden',isMonth);
+  document.getElementById('monthOnlyRow').classList.toggle('hidden',!isMonth);
+  document.getElementById('btnTask').disabled = isMonth;
+  if(isMonth) setType('event');
 }
 function saveItem(){
   const title=document.getElementById('inputTitle').value.trim();
@@ -1598,7 +1792,7 @@ function saveItem(){
     id:Date.now().toString(), type:S.newType, title, date, monthOnly,
     time:monthOnly?'':document.getElementById('inputTime').value,
     note:document.getElementById('inputNote').value.trim(),
-    done:false, repeat:currentRepeat
+    done:false, repeat:S.newType==='event' ? currentRepeat : 'none'
   };
   S.items.push(newItem);
   save(); closeModal();
@@ -1609,12 +1803,16 @@ function saveItem(){
   // 구글에 전송
   if(isGConnected()){
     if(monthOnly){
-      // 이달 중에 → 해당 월 1일 00:00으로 구글에 저장
-      const [y,m] = date.split('-').map(Number);
-      const googleDate = `${y}-${String(m).padStart(2,'0')}-01`;
-      const googleItem = {...newItem, date:googleDate, time:'00:00'};
-      if(newItem.type==='event') gCreateEvent(googleItem, newItem.id);
-      else gCreateTask(googleItem, newItem.id);
+      // 이달 중에 → Google Calendar에 [이달] + 해당 월 1일 00:00으로 저장
+      // Google Tasks는 월 단위 표현이 불안정해서 사용하지 않음
+      const googleItem = {
+        ...newItem,
+        type:'event',
+        date:firstDayOfMonth(date),
+        time:'00:00',
+        title: hasMonthTag(newItem.title) ? newItem.title : `${MONTH_TAG} ${newItem.title}`
+      };
+      gCreateEvent(googleItem, newItem.id);
     } else {
       if(newItem.type==='event') gCreateEvent(newItem, newItem.id);
       else gCreateTask(newItem, newItem.id);
@@ -1630,26 +1828,43 @@ function openEditModal(id){
   const item = S.items.find(i=>i.id===id);
   if(!item) return;
   editId = id;
-  editRepeat = item.repeat || 'none';
+  editRepeat = item.type === 'task' ? 'none' : (item.repeat || 'none');
   document.getElementById('editTitle').value = item.title;
   document.getElementById('editDate').value = item.monthOnly ? '' : (item.date||'');
   document.getElementById('editTime').value = item.time||'';
   document.getElementById('editNote').value = item.note||'';
   setEditType(item.type);
+  const lockType = !!item.gId;
+  document.getElementById('editBtnEvent').disabled = lockType;
+  document.getElementById('editBtnTask').disabled = lockType;
   setEditRepeat(editRepeat);
   document.getElementById('editModalOverlay').classList.add('open');
   setTimeout(()=>document.getElementById('editTitle').focus(), 200);
 }
-function closeEditModal(){ document.getElementById('editModalOverlay').classList.remove('open'); editId=null; }
+function closeEditModal(){ document.getElementById('editModalOverlay').classList.remove('open'); document.getElementById('editBtnEvent').disabled=false; document.getElementById('editBtnTask').disabled=false; editId=null; }
 function closeEditModalOutside(e){ if(e.target===document.getElementById('editModalOverlay')) closeEditModal(); }
+function updateEditRepeatAvailability(){
+  const disableRepeat = S._editType === 'task';
+  ['monthly','yearly'].forEach(id=>{
+    const btn = document.getElementById('erep-'+id);
+    if(btn) btn.disabled = disableRepeat;
+  });
+  if(disableRepeat && editRepeat !== 'none') setEditRepeat('none');
+}
 function setEditType(t){
   document.getElementById('editBtnEvent').classList.toggle('active', t==='event');
   document.getElementById('editBtnTask').classList.toggle('active', t==='task');
   S._editType = t;
+  updateEditRepeatAvailability();
 }
 function setEditRepeat(r){
+  // Google Tasks 반복 연동은 불안정하므로 반복은 일정에만 허용
+  if(S._editType === 'task' && r !== 'none'){
+    showToast('반복은 일정에서만 사용할 수 있어요');
+    r = 'none';
+  }
   editRepeat=r;
-  ['none','monthly','yearly','lunar'].forEach(id=>{
+  ['none','monthly','yearly'].forEach(id=>{
     document.getElementById('erep-'+id)?.classList.toggle('active', id===r);
   });
 }
@@ -1664,18 +1879,27 @@ function saveEditItem(){
   if(date) item.date = date;
   item.time = document.getElementById('editTime').value;
   item.note = document.getElementById('editNote').value.trim();
-  item.repeat = editRepeat;
+  item.repeat = item.type==='event' ? editRepeat : 'none';
   save(); closeEditModal(); renderAll(); showToast('Updated');
-  // push to Google
-  if(isGConnected()){
-    if(item.type==='event') gUpdateEvent(item);
-    else gUpdateTask(item);
+  // push to Google. 토큰 만료/오프라인이면 pending으로 보존하고 다음 동기화 때 재시도.
+  if(item.gId) gPushFullUpdate(item);
+  else if(isGConnected()){
+    if(item.type==='event') gCreateEvent(item, item.id);
+    else gCreateTask(item, item.id);
   }
 }
 function deleteEditItem(){
-  // 삭제 기능 비활성화 - 구글 캘린더에서 직접 삭제하세요
-  showToast('삭제는 구글 캘린더에서 해주세요');
-  closeEditModal();
+  if(!editId) return;
+  if(confirm('삭제할까요?')){
+    const item = S.items.find(i=>i.id===editId);
+    // delete from Google first
+    if(item && isGConnected() && item.gId){
+      if(item.type==='event') gDeleteEvent(item.gId);
+      else gDeleteTask(item.gId, item.gListId);
+    }
+    S.items = S.items.filter(i=>i.id!==editId);
+    save(); closeEditModal(); renderAll(); showToast('Deleted');
+  }
 }
 
 
@@ -1702,26 +1926,26 @@ let G = {
 
 function isGConnected(){ return !!(G.token && Date.now() < G.expiry); }
 
-// 토큰 만료 10분 전에 자동 갱신
-function gScheduleRefresh(){
-  const remaining = G.expiry - Date.now() - 10*60*1000; // 만료 10분 전
-  if(remaining <= 0) return;
-  setTimeout(()=>{
-    if(!isGConnected()) return;
-    // silent re-login via hidden iframe approach
-    const redirectUri = 'https://dreameet01.github.io/MyPlanner/';
-    const params = new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID,
-      redirect_uri: redirectUri,
-      response_type: 'token',
-      scope: GOOGLE_SCOPES,
-      prompt: 'none', // silent - no UI shown
-      login_hint: G.email,
-    });
-    // Use iframe for silent refresh
+function gTrySilentRefresh(){
+  return new Promise(resolve=>{
+    if(!G.email){ resolve(false); return; }
     const iframe = document.createElement('iframe');
     iframe.style.display = 'none';
-    iframe.src = 'https://accounts.google.com/o/oauth2/v2/auth?' + params;
+    const params = new URLSearchParams({
+      client_id: GOOGLE_CLIENT_ID,
+      redirect_uri: 'https://dreameet01.github.io/MyPlanner/',
+      response_type: 'token',
+      scope: GOOGLE_SCOPES,
+      prompt: 'none',
+      login_hint: G.email,
+    });
+    let done = false;
+    const finish = ok=>{
+      if(done) return;
+      done = true;
+      try { document.body.removeChild(iframe); } catch(e){}
+      resolve(ok);
+    };
     iframe.onload = ()=>{
       try {
         const hash = iframe.contentWindow.location.hash.slice(1);
@@ -1732,15 +1956,32 @@ function gScheduleRefresh(){
           G.token = token;
           G.expiry = Date.now() + expiresIn*1000;
           localStorage.setItem('g_token', token);
-          localStorage.setItem('g_expiry', G.expiry);
+          localStorage.setItem('g_expiry', String(G.expiry));
           renderAcctPanel();
           gScheduleRefresh();
+          finish(true);
+          return;
         }
       } catch(e){}
-      document.body.removeChild(iframe);
+      finish(false);
     };
+    iframe.onerror = ()=>finish(false);
+    iframe.src = 'https://accounts.google.com/o/oauth2/v2/auth?' + params;
     document.body.appendChild(iframe);
-  }, remaining);
+    setTimeout(()=>finish(false), 6000);
+  });
+}
+
+async function gEnsureConnected(){
+  if(isGConnected()) return true;
+  return await gTrySilentRefresh();
+}
+
+// 토큰 만료 10분 전에 자동 갱신
+function gScheduleRefresh(){
+  const remaining = G.expiry - Date.now() - 10*60*1000; // 만료 10분 전
+  if(remaining <= 0){ gTrySilentRefresh(); return; }
+  setTimeout(()=>{ gTrySilentRefresh(); }, remaining);
 }
 
 function toggleAcctPanel(){
@@ -1829,15 +2070,21 @@ function gDisconnect(){
 }
 
 async function gSync(){
-  if(!isGConnected()){ showToast('구글 로그인이 필요해요'); return; }
+  if(!await gEnsureConnected()){ showToast('구글 로그인이 필요해요'); return; }
   document.getElementById('acctPanel').classList.remove('open');
   const btn = document.getElementById('syncBtn');
   if(btn){ btn.style.opacity='0.4'; btn.style.pointerEvents='none'; }
   showToast('동기화 중...');
   try {
+    await gFlushPendingTaskUpdates();
+    await gFlushPendingDateUpdates();
+    await gFlushPendingFullUpdates();
     await gFetchCalendar();
     await gFetchTasks();
-    save(); renderAll(); showToast('✓ 동기화 완료');
+    save();
+    if(S.curView==='list') renderList(true);
+    else renderAll();
+    showToast('✓ 동기화 완료');
   } catch(err){
     showToast('동기화 실패: ' + err.message);
   }
@@ -1855,30 +2102,54 @@ async function gFetchCalendar(){
   );
   if(!res.ok) throw new Error('캘린더 오류 '+res.status);
   const data = await res.json();
-  const incoming = (data.items||[]).map(e=>({
-    id:'gev_'+e.id, gId:e.id, type:'event',
-    title:e.summary||'(제목 없음)',
-    date:(e.start.date||e.start.dateTime||'').slice(0,10),
-    time:e.start.dateTime?e.start.dateTime.slice(11,16):'',
-    note:e.description||'', done:false, monthOnly:false,
-    source:'google',
-  })).filter(e=>e.date);
-  // 기존 이벤트 순서 맵
-  const existingEvtOrderMap = {};
-  let maxEvtOrder = -1;
-  S.items.filter(i=>i.source==='google'&&i.type==='event').forEach(i=>{
-    if(i.gId){
-      existingEvtOrderMap[i.gId] = i.manualOrder!=null ? i.manualOrder : null;
-      if(i.manualOrder!=null && i.manualOrder > maxEvtOrder) maxEvtOrder = i.manualOrder;
+  const incoming = (data.items||[]).map(e=>{
+    const rawTitle = e.summary || '(제목 없음)';
+    const rawDate = (e.start.date||e.start.dateTime||'').slice(0,10);
+    const rawTime = e.start.dateTime ? e.start.dateTime.slice(11,16) : '';
+    const d = parseDs(rawDate);
+    const taggedMonth = !!(hasMonthTag(rawTitle) && d && d.getDate()===1 && rawTime==='00:00');
+    const oldItem = S.items.find(i=>i.type==='event' && i.gId===e.id);
+    if(oldItem?.pendingUpdateSync){
+      return {
+        id:'gev_'+e.id, gId:e.id, type:'event',
+        rawTitle: oldItem.rawTitle || rawTitle,
+        title: oldItem.title,
+        date: oldItem.date,
+        time: oldItem.time || '',
+        note: oldItem.note || '',
+        done: !!oldItem.done,
+        repeat: oldItem.repeat || 'none',
+        pendingDateSync: !!oldItem.pendingDateSync,
+        pendingUpdateSync: true,
+        monthOnly: !!oldItem.monthOnly,
+        source:'google',
+      };
     }
-  });
-
+    return {
+      id:'gev_'+e.id, gId:e.id, type:'event',
+      rawTitle,
+      title: taggedMonth ? stripMonthTag(rawTitle) : rawTitle,
+      date: oldItem?.pendingDateSync ? oldItem.date : (taggedMonth ? monthKeyFromDate(rawDate) : rawDate),
+      time: oldItem?.pendingDateSync ? (oldItem.time||'') : (taggedMonth ? '' : rawTime),
+      note:e.description||'',
+      repeat: oldItem?.repeat || 'none',
+      // Google Calendar에는 완료 체크 상태가 없어서 웹앱 로컬 상태를 보존한다.
+      done: !!oldItem?.done,
+      pendingDateSync: !!oldItem?.pendingDateSync,
+      pendingUpdateSync: false,
+      monthOnly: oldItem?.pendingDateSync ? !!oldItem.monthOnly : taggedMonth,
+      source:'google',
+    };
+  }).filter(e=>e.date);
+  // 기존 사용자가 조정한 순서는 gId+date 기준으로 보존
+  // 새로 들어온 항목은 날짜별로 겹치지 않는 순서를 순차 부여
+  const nextIncomingOrder = makeIncomingOrderAllocator();
   const mergedEvents = incoming.map(newItem=>{
-    if(existingEvtOrderMap[newItem.gId] != null){
-      newItem.manualOrder = existingEvtOrderMap[newItem.gId];
+    const saved = getSavedOrder(newItem, newItem.date);
+    if(saved != null){
+      newItem.manualOrder = saved;
     } else {
-      maxEvtOrder++;
-      newItem.manualOrder = maxEvtOrder;
+      setSavedOrder(newItem, nextIncomingOrder(newItem.date), newItem.date);
     }
     return newItem;
   });
@@ -1909,41 +2180,36 @@ async function gFetchTasks(){
       if(!t.due) continue;
       const dueDate = t.due.slice(0,10);
       // 할일은 시간 표시 없음 - 무조건 해당 날짜에만 표시
+      const oldItem = S.items.find(i=>i.type==='task' && i.gId===t.id);
       incoming.push({
         id:'gtk_'+t.id,
         gId:t.id,
         gListId:list.id,
         type:'task',
-        title:t.title||'',
-        date:dueDate,
+        title: oldItem?.pendingUpdateSync ? oldItem.title : (t.title||''),
+        date: (oldItem?.pendingUpdateSync || oldItem?.pendingDateSync) ? oldItem.date : dueDate,
         time:'',
-        note:t.notes||'',
-        done:t.status==='completed',
+        note: oldItem?.pendingUpdateSync ? (oldItem.note||'') : (t.notes||''),
+        // If a checkbox change is waiting to be pushed, keep the local desired state.
+        done: (oldItem?.pendingUpdateSync || oldItem?.pendingDoneSync) ? oldItem.done : (t.status==='completed'),
+        pendingDoneSync: !!oldItem?.pendingDoneSync,
+        pendingDateSync: !!oldItem?.pendingDateSync,
+        pendingUpdateSync: !!oldItem?.pendingUpdateSync,
         monthOnly:false,
         source:'google',
       });
     }
   }
 
-  // 기존 항목 순서 맵 (gId → manualOrder)
-  const existingOrderMap = {};
-  let maxOrder = -1;
-  S.items.filter(i=>i.source==='google'&&i.type==='task').forEach(i=>{
-    if(i.gId){
-      existingOrderMap[i.gId] = i.manualOrder!=null ? i.manualOrder : null;
-      if(i.manualOrder!=null && i.manualOrder > maxOrder) maxOrder = i.manualOrder;
-    }
-  });
-
-  // 새 항목은 맨 뒤에 순서 부여
+  // 기존 사용자가 조정한 순서는 gId+date 기준으로 보존
+  // 새로 들어온 항목은 날짜별로 겹치지 않는 순서를 순차 부여
+  const nextIncomingOrder = makeIncomingOrderAllocator();
   const mergedItems = incoming.map(newItem=>{
-    if(existingOrderMap[newItem.gId] != null){
-      // 기존 항목 - 내가 설정한 순서 유지
-      newItem.manualOrder = existingOrderMap[newItem.gId];
+    const saved = getSavedOrder(newItem, newItem.date);
+    if(saved != null){
+      newItem.manualOrder = saved;
     } else {
-      // 새 항목 - 맨 뒤에 추가
-      maxOrder++;
-      newItem.manualOrder = maxOrder;
+      setSavedOrder(newItem, nextIncomingOrder(newItem.date), newItem.date);
     }
     return newItem;
   });
@@ -1956,16 +2222,109 @@ async function gFetchTasks(){
 
 // patch task done status back to Google
 async function gPatchTask(item){
-  if(!isGConnected()||!item.gId||!item.gListId) return;
+  if(!isGConnected()||!item.gId||!item.gListId) return false;
   try {
-    await fetch(
+    const res = await fetch(
       `https://tasks.googleapis.com/tasks/v1/lists/${item.gListId}/tasks/${item.gId}`,
       { method:'PATCH',
         headers:{Authorization:`Bearer ${G.token}`,'Content-Type':'application/json'},
         body:JSON.stringify({status:item.done?'completed':'needsAction'})
       }
     );
-  } catch(e){}
+    return res.ok;
+  } catch(e){
+    return false;
+  }
+}
+
+async function gFlushPendingTaskUpdates(){
+  if(!isGConnected()) return false;
+  const pending = S.items.filter(i=>i.type==='task' && i.gId && i.gListId && i.pendingDoneSync);
+  if(!pending.length) return true;
+  let allOk = true;
+  for(const item of pending){
+    const ok = await gPatchTask(item);
+    if(ok) item.pendingDoneSync = false;
+    else allOk = false;
+  }
+  save();
+  return allOk;
+}
+
+async function gPushDateChange(item){
+  if(!item || !item.gId) return true;
+  const okConn = await gEnsureConnected();
+  if(!okConn){
+    item.pendingDateSync = true;
+    save();
+    showToast('날짜 이동 저장됨 · 구글은 로그인 후 반영');
+    return false;
+  }
+  let ok = true;
+  if(item.type === 'event') ok = await gUpdateEvent(item);
+  else if(item.type === 'task') ok = await gUpdateTask(item);
+  if(ok){
+    item.pendingDateSync = false;
+  } else {
+    item.pendingDateSync = true;
+    showToast('날짜 이동 저장됨 · 다음 동기화 때 재시도');
+  }
+  save();
+  return ok;
+}
+
+async function gFlushPendingDateUpdates(){
+  if(!isGConnected()) return false;
+  const pending = S.items.filter(i=>i.gId && i.pendingDateSync);
+  if(!pending.length) return true;
+  let allOk = true;
+  for(const item of pending){
+    let ok = true;
+    if(item.type === 'event') ok = await gUpdateEvent(item);
+    else if(item.type === 'task') ok = await gUpdateTask(item);
+    if(ok) item.pendingDateSync = false;
+    else allOk = false;
+  }
+  save();
+  return allOk;
+}
+
+async function gPushFullUpdate(item){
+  if(!item || !item.gId) return true;
+  const okConn = await gEnsureConnected();
+  if(!okConn){
+    item.pendingUpdateSync = true;
+    save();
+    showToast('수정 저장됨 · 구글은 로그인 후 반영');
+    return false;
+  }
+  let ok = true;
+  if(item.type === 'event') ok = await gUpdateEvent(item);
+  else if(item.type === 'task') ok = await gUpdateTask(item);
+  if(ok){
+    item.pendingUpdateSync = false;
+  } else {
+    item.pendingUpdateSync = true;
+    showToast('수정 저장됨 · 다음 동기화 때 재시도');
+  }
+  save();
+  return ok;
+}
+
+async function gFlushPendingFullUpdates(){
+  if(!isGConnected()) return false;
+  const pending = S.items.filter(i=>i.gId && i.pendingUpdateSync);
+  if(!pending.length) return true;
+  let allOk = true;
+  for(const item of pending){
+    let ok = true;
+    if(item.type === 'event') ok = await gUpdateEvent(item);
+    else if(item.type === 'task') ok = await gUpdateTask(item);
+    if(ok) item.pendingUpdateSync = false;
+    else allOk = false;
+  }
+  save();
+  return allOk;
 }
 
 // ── BIDIRECTIONAL: APP → GOOGLE ──
@@ -1989,15 +2348,25 @@ async function gCreateEvent(item, localId){
   if(localItem?.gId) return;
   try {
     const body = { summary: item.title, description: item.note||'' };
-    if(item.time){
+    const isMonth = item.monthOnly || hasMonthTag(item.title);
+    if(isMonth){
+      const mDate = item.date && item.date.length===7 ? firstDayOfMonth(item.date) : item.date;
+      const dt = mDate + 'T00:00:00';
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      body.summary = hasMonthTag(item.title) ? item.title : `${MONTH_TAG} ${item.title}`;
+      body.start = {dateTime: dt, timeZone: tz};
+      body.end   = {dateTime: addMinutesToLocalDateTime(mDate, '00:00', 1), timeZone: tz};
+    } else if(item.time){
       const dt = item.date + 'T' + item.time + ':00';
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       body.start = {dateTime: dt, timeZone: tz};
-      body.end   = {dateTime: dt, timeZone: tz};
+      body.end   = {dateTime: addMinutesToLocalDateTime(item.date, item.time, 60), timeZone: tz};
     } else {
       body.start = {date: item.date};
-      body.end   = {date: item.date};
+      body.end   = {date: nextDayStr(item.date)};
     }
+    const rec = recurrenceForRepeat(item);
+    if(rec) body.recurrence = rec;
     const res = await fetch(
       'https://www.googleapis.com/calendar/v3/calendars/primary/events',
       { method:'POST',
@@ -2016,30 +2385,49 @@ async function gCreateEvent(item, localId){
 
 // Update event on Google Calendar
 async function gUpdateEvent(item){
-  if(!isGConnected()||!item.gId||item.type!=='event') return;
+  if(!isGConnected()||!item.gId||item.type!=='event') return false;
   try {
     const body = { summary: item.title, description: item.note||'' };
-    if(item.time){
+    const isMonth = item.monthOnly || hasMonthTag(item.title);
+    if(isMonth){
+      const mDate = item.date && item.date.length===7 ? firstDayOfMonth(item.date) : item.date;
+      const dt = mDate + 'T00:00:00';
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      body.summary = hasMonthTag(item.title) ? item.title : `${MONTH_TAG} ${item.title}`;
+      body.start = {dateTime: dt, timeZone: tz};
+      body.end   = {dateTime: addMinutesToLocalDateTime(mDate, '00:00', 1), timeZone: tz};
+    } else if(item.time){
       const dt = item.date + 'T' + item.time + ':00';
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       body.start = {dateTime: dt, timeZone: tz};
-      body.end   = {dateTime: dt, timeZone: tz};
+      body.end   = {dateTime: addMinutesToLocalDateTime(item.date, item.time, 60), timeZone: tz};
     } else {
       body.start = {date: item.date};
-      body.end   = {date: item.date};
+      body.end   = {date: nextDayStr(item.date)};
     }
-    await fetch(
+    const rec = recurrenceForRepeat(item);
+    body.recurrence = rec || [];
+    const res = await fetch(
       `https://www.googleapis.com/calendar/v3/calendars/primary/events/${item.gId}`,
       { method:'PATCH',
         headers:{Authorization:`Bearer ${G.token}`,'Content-Type':'application/json'},
         body: JSON.stringify(body)
       }
     );
-  } catch(e){}
+    return res.ok;
+  } catch(e){ return false; }
 }
 
-// Delete - disabled for safety
-async function gDeleteEvent(gId){ /* 삭제 비활성화 */ }
+// Delete event from Google Calendar
+async function gDeleteEvent(gId){
+  if(!isGConnected()||!gId) return;
+  try {
+    await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events/${gId}`,
+      { method:'DELETE', headers:{Authorization:`Bearer ${G.token}`} }
+    );
+  } catch(e){}
+}
 
 // Create task on Google Tasks
 async function gCreateTask(item, localId){
@@ -2073,9 +2461,9 @@ async function gCreateTask(item, localId){
 
 // Update task on Google Tasks
 async function gUpdateTask(item){
-  if(!isGConnected()||!item.gId||!item.gListId) return;
+  if(!isGConnected()||!item.gId||!item.gListId) return false;
   try {
-    await fetch(
+    const res = await fetch(
       `https://tasks.googleapis.com/tasks/v1/lists/${item.gListId}/tasks/${item.gId}`,
       { method:'PATCH',
         headers:{Authorization:`Bearer ${G.token}`,'Content-Type':'application/json'},
@@ -2087,11 +2475,20 @@ async function gUpdateTask(item){
         })
       }
     );
-  } catch(e){}
+    return res.ok;
+  } catch(e){ return false; }
 }
 
-// Delete task - disabled for safety
-async function gDeleteTask(gId, gListId){ /* 삭제 비활성화 */ }
+// Delete task from Google Tasks
+async function gDeleteTask(gId, gListId){
+  if(!isGConnected()||!gId||!gListId) return;
+  try {
+    await fetch(
+      `https://tasks.googleapis.com/tasks/v1/lists/${gListId}/tasks/${gId}`,
+      { method:'DELETE', headers:{Authorization:`Bearer ${G.token}`} }
+    );
+  } catch(e){}
+}
 
 
 // ── INIT ──
@@ -2102,51 +2499,25 @@ window.addEventListener('load', function() {
   buildThemePanel();
   renderAcctPanel();
   gHandleRedirect();
-  renderList(true);
+  switchView('list');
+  initCalSwipe();
 
-  // 토큰 만료됐지만 이메일 있으면 자동 재로그인 시도
+  // 토큰이 만료되어도 Google 로그인 세션이 살아있으면 조용히 새 토큰을 받아 계속 로그인처럼 유지
   if(G.email && !isGConnected()){
-    const iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    const params = new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID,
-      redirect_uri: 'https://dreameet01.github.io/MyPlanner/',
-      response_type: 'token',
-      scope: GOOGLE_SCOPES,
-      prompt: 'none',
-      login_hint: G.email,
-    });
-    iframe.src = 'https://accounts.google.com/o/oauth2/v2/auth?' + params;
-    iframe.onload = ()=>{
-      try {
-        const hash = iframe.contentWindow.location.hash.slice(1);
-        const p = new URLSearchParams(hash);
-        const token = p.get('access_token');
-        const expiresIn = parseInt(p.get('expires_in')||'3600');
-        if(token){
-          G.token = token;
-          G.expiry = Date.now() + expiresIn*1000;
-          localStorage.setItem('g_token', token);
-          localStorage.setItem('g_expiry', String(G.expiry));
-          renderAcctPanel();
-          gScheduleRefresh();
-          gSync();
-        }
-      } catch(e){}
-      try { document.body.removeChild(iframe); } catch(e){}
-    };
-    document.body.appendChild(iframe);
+    gTrySilentRefresh().then(ok=>{ if(ok) gSync(); else renderAcctPanel(); });
   } else if(isGConnected()){
     gScheduleRefresh();
     gSync();
   }
 
   // 5분마다 자동 동기화 (화면 켜져있을때만)
-  setInterval(()=>{
+  setInterval(async ()=>{
     if(document.hidden) return;
-    if(isGConnected()){
-      gFetchCalendar().then(()=>gFetchTasks()).then(()=>{
-        save(); renderAll();
+    if(await gEnsureConnected()){
+      gFlushPendingTaskUpdates().then(()=>gFlushPendingDateUpdates()).then(()=>gFlushPendingFullUpdates()).then(()=>gFetchCalendar()).then(()=>gFetchTasks()).then(()=>{
+        save();
+        if(S.curView==='list') renderList(false);
+        else renderAll();
       }).catch(()=>{});
     }
   }, 5 * 60 * 1000);
