@@ -306,6 +306,9 @@ body {
   font-family:'SF Mono', 'Consolas', monospace;
 }
 .fab:active { transform:scale(0.92); }
+/* Calendar detail에서 수정 버튼(⋯)과 FAB가 겹치지 않도록 Cal 화면에서는 FAB를 왼쪽으로 이동 */
+.fab.cal-mode { left:16px; right:auto; }
+.day-detail .item-row { padding-right:10px; }
 
 /* ─── MODAL ─── */
 .modal-overlay {
@@ -653,6 +656,12 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
   white-space:nowrap;
 }
 .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+
+
+/* Cal view: keep bottom list clear of the floating + button */
+#viewCal .day-detail {
+  margin-bottom:100px;
+}
 
 ::-webkit-scrollbar { width:3px; }
 ::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
@@ -1098,6 +1107,16 @@ function repeatFromRecurrenceLines(lines){
   if(joined.includes('FREQ=YEARLY')) return 'yearly';
   return 'none';
 }
+function isGoogleRepeatEvent(item){
+  if(!item || item.type !== 'event' || item.source !== 'google') return false;
+  if(item.recurringEventId) return true;
+  if(normalizeRepeatValue(item.repeat) !== 'none') return true;
+  if(Array.isArray(item.recurrence) && item.recurrence.some(r=>String(r).toUpperCase().includes('RRULE'))) return true;
+  return false;
+}
+function isGoogleLinkedItem(item){
+  return !!(item && item.source === 'google' && item.gId);
+}
 function makeIncomingOrderAllocator(){
   const cursor = {};
   return function(date){
@@ -1233,20 +1252,50 @@ function renderAllPreserveScroll(){
   requestAnimationFrame(()=>{ if(el) el.scrollTop=scrollY; });
 }
 function toggleDetail(id){ document.getElementById('detail_'+id)?.classList.toggle('open'); }
-async function confirmDelete(id){
-  if(confirm('삭제할까요?')){
-    const item = S.items.find(i=>i.id===id);
-    if(item && item.gId){
-      const okConn = await gEnsureConnected();
-      let ok = false;
-      if(okConn){
-        ok = item.type==='event' ? await gDeleteEvent(item.gId) : await gDeleteTask(item.gId, item.gListId);
-      }
-      if(!ok) queuePendingDelete(item);
-    }
-    S.items=S.items.filter(i=>i.id!==id);
-    save();renderAll();showToast('Deleted');
+async function deleteItemWithConfirm(item, afterClose){
+  if(!item) return;
+  if(isGoogleRepeatEvent(item)){
+    showToast('반복 일정은 Google Calendar에서 삭제해주세요');
+    if(typeof afterClose === 'function') afterClose();
+    return;
   }
+
+  const linked = isGoogleLinkedItem(item);
+  const msg = linked
+    ? '이 항목을 Google에서도 삭제할까요?'
+    : '삭제할까요?';
+  if(!confirm(msg)) return;
+
+  S.items = S.items.filter(i=>i.id!==item.id);
+  save();
+  if(typeof afterClose === 'function') afterClose();
+  renderAll();
+
+  if(linked){
+    queuePendingDelete(item);
+    const okConn = await gEnsureConnected();
+    if(okConn){
+      const ok = item.type === 'event'
+        ? await gDeleteEvent(item.gId)
+        : await gDeleteTask(item.gId, item.gListId);
+      if(ok){
+        const remain = getPendingDeletes().filter(d => !(d.gId === item.gId && d.type === item.type));
+        savePendingDeletes(remain);
+        showToast('Google에서도 삭제됨');
+      } else {
+        showToast('로컬 삭제됨 · Google 삭제는 다음 동기화 때 재시도');
+      }
+    } else {
+      showToast('로컬 삭제됨 · 로그인 후 Google 삭제 재시도');
+    }
+  } else {
+    showToast('Deleted');
+  }
+}
+
+async function confirmDelete(id){
+  const item = S.items.find(i=>i.id===id);
+  await deleteItemWithConfirm(item);
 }
 
 function makeItemRow(item){
@@ -1301,7 +1350,14 @@ function makeItemRow(item){
   more.type='button';
   more.textContent='⋯';
   more.title='수정';
-  more.onclick=e=>{ e.stopPropagation(); openEditModal(item.id); };
+  more.onclick=e=>{
+    e.stopPropagation();
+    if(isGoogleRepeatEvent(item)){
+      showToast('반복 일정은 Google Calendar에서 수정해주세요');
+      return;
+    }
+    openEditModal(item.id);
+  };
   row.appendChild(more);
 
   // drag events for reorder across any date
@@ -1333,18 +1389,24 @@ function makeItemRow(item){
     if(fromId===item.id) return;
     const fromItem=S.items.find(i=>i.id===fromId);
     if(!fromItem) return;
-    if(fromItem.type==='task' && isMonthLevelItem(item)){
+    const targetIsMonthLevel = isMonthLevelItem(item);
+    const targetDate = item.date;
+    if(fromItem.type==='task' && targetIsMonthLevel){
       showToast('할일은 월헤더로 이동할 수 없어요');
+      return;
+    }
+    if(isGoogleRepeatEvent(fromItem) && (fromItem.date !== targetDate || !!fromItem.monthOnly !== !!targetIsMonthLevel)){
+      showToast('반복 일정 날짜 이동은 Google Calendar에서 해주세요');
       return;
     }
 
     // move to this item's date/month. If converting to/from 월헤더, preserve the original time locally.
     const oldDate = fromItem.date;
     const oldMonthOnly = !!fromItem.monthOnly;
-    if(isMonthLevelItem(item)){
-      moveItemToMonthOnly(fromItem, item.date);
+    if(targetIsMonthLevel){
+      moveItemToMonthOnly(fromItem, targetDate);
     } else {
-      moveItemToExactDate(fromItem, item.date);
+      moveItemToExactDate(fromItem, targetDate);
     }
     const dateChanged = oldDate !== fromItem.date || oldMonthOnly !== !!fromItem.monthOnly;
 
@@ -1385,6 +1447,10 @@ function makeDayBlock(dateStr,items){
     e.preventDefault(); hdr.style.background='';
     const fromId=e.dataTransfer.getData('text/plain');
     const fromItem=S.items.find(i=>i.id===fromId); if(!fromItem) return;
+    if(isGoogleRepeatEvent(fromItem) && (fromItem.date !== dateStr || !!fromItem.monthOnly)){
+      showToast('반복 일정 날짜 이동은 Google Calendar에서 해주세요');
+      return;
+    }
     const oldDate = fromItem.date;
     const oldMonthOnly = !!fromItem.monthOnly;
     moveItemToExactDate(fromItem, dateStr);
@@ -1686,6 +1752,7 @@ function newMemo(){
   save(); openMemoEditor(id);
 }
 function openMemoEditor(id){
+  pushAppModalState('memo');
   S.curMemoId=id;
   const memo=S.memos.find(m=>m.id===id); if(!memo)return;
   const c=MEMO_COLORS.find(x=>x.id===(memo.color||'white'))||MEMO_COLORS[0];
@@ -1790,7 +1857,9 @@ function switchView(v){
   S.curView=v; showViewEl(v);
   document.querySelectorAll('.view-tab').forEach((t,i)=>t.classList.toggle('active',['list','cal','year','memo'][i]===v));
   // FAB visible on main views: Memo creates memo, other views create schedule/task
-  document.getElementById('fabBtn').classList.toggle('hidden', v==='search');
+  const fab = document.getElementById('fabBtn');
+  fab.classList.toggle('hidden', v==='search');
+  fab.classList.toggle('cal-mode', v==='cal');
   if(v==='list'){renderList(true);}
   else if(v==='cal')renderCal();
   else if(v==='year')renderYear();
@@ -1807,9 +1876,24 @@ function renderAll(){
   else if(S.curView==='year')renderYear();
 }
 
+
+// ── MOBILE BACK BUTTON SUPPORT ──
+function pushAppModalState(kind){
+  try { history.pushState({plannerModal:kind}, '', location.href); } catch(e){}
+}
+window.addEventListener('popstate', function(){
+  const editOverlay = document.getElementById('editModalOverlay');
+  const addOverlay = document.getElementById('modalOverlay');
+  const memoEditor = document.getElementById('memoEditor');
+  if(editOverlay && editOverlay.classList.contains('open')){ closeEditModal(); return; }
+  if(addOverlay && addOverlay.classList.contains('open')){ closeModal(); return; }
+  if(memoEditor && memoEditor.classList.contains('open')){ closeMemoEditor(); return; }
+});
+
 // ── MODAL ──
 function onFab(){ if(S.curView==='memo')newMemo(); else openModal(); }
 function openModal(){
+  pushAppModalState('add');
   document.getElementById('modalOverlay').classList.add('open');
   document.getElementById('inputDate').value=S.selDate||fmtDs(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate());
   document.getElementById('inputMonth').value=`${TODAY.getFullYear()}-${String(TODAY.getMonth()+1).padStart(2,'0')}`;
@@ -1897,6 +1981,11 @@ function applyEditRepeatUI(item){
 function openEditModal(id){
   const item = S.items.find(i=>i.id===id);
   if(!item) return;
+  if(isGoogleRepeatEvent(item)){
+    showToast('반복 일정은 Google Calendar에서 수정해주세요');
+    return;
+  }
+  pushAppModalState('edit');
   editId = id;
   const itemRepeat = normalizeRepeatValue(item.repeat || repeatFromRecurrenceLines(item.recurrence));
   item.repeat = item.type === 'event' ? itemRepeat : 'none';
@@ -1973,6 +2062,11 @@ function setEditRepeat(r){
 function saveEditItem(){
   if(!editId) return;
   const item = S.items.find(i=>i.id===editId); if(!item) return;
+  if(isGoogleRepeatEvent(item)){
+    showToast('반복 일정은 Google Calendar에서 수정해주세요');
+    closeEditModal();
+    return;
+  }
   const title = document.getElementById('editTitle').value.trim();
   const isMonth = editDateMode==='month';
   const date = isMonth ? document.getElementById('editMonth').value : document.getElementById('editDate').value;
@@ -1994,19 +2088,8 @@ function saveEditItem(){
 }
 async function deleteEditItem(){
   if(!editId) return;
-  if(confirm('삭제할까요?')){
-    const item = S.items.find(i=>i.id===editId);
-    if(item && item.gId){
-      const okConn = await gEnsureConnected();
-      let ok = false;
-      if(okConn){
-        ok = item.type==='event' ? await gDeleteEvent(item.gId) : await gDeleteTask(item.gId, item.gListId);
-      }
-      if(!ok) queuePendingDelete(item);
-    }
-    S.items = S.items.filter(i=>i.id!==editId);
-    save(); closeEditModal(); renderAll(); showToast('Deleted');
-  }
+  const item = S.items.find(i=>i.id===editId);
+  await deleteItemWithConfirm(item, closeEditModal);
 }
 
 
