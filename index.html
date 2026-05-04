@@ -1082,11 +1082,21 @@ function addMinutesToLocalDateTime(dateStr, timeStr, minutes){
   d.setMinutes(d.getMinutes() + minutes);
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:00`;
 }
+function normalizeRepeatValue(r){
+  return (r === 'monthly' || r === 'yearly') ? r : 'none';
+}
 function recurrenceForRepeat(item){
-  if(!item || !item.repeat || item.repeat==='none') return null;
-  if(item.repeat==='monthly') return ['RRULE:FREQ=MONTHLY'];
-  if(item.repeat==='yearly') return ['RRULE:FREQ=YEARLY'];
+  const r = normalizeRepeatValue(item?.repeat);
+  if(r==='monthly') return ['RRULE:FREQ=MONTHLY'];
+  if(r==='yearly') return ['RRULE:FREQ=YEARLY'];
   return null;
+}
+function repeatFromRecurrenceLines(lines){
+  if(!Array.isArray(lines)) return 'none';
+  const joined = lines.join('\n').toUpperCase();
+  if(joined.includes('FREQ=MONTHLY')) return 'monthly';
+  if(joined.includes('FREQ=YEARLY')) return 'yearly';
+  return 'none';
 }
 function makeIncomingOrderAllocator(){
   const cursor = {};
@@ -1123,7 +1133,7 @@ function getMonthItems(y,m){
     // Google 1일 00:00 items for this month
     if(i.source==='google' && i.date.startsWith(k) && isMonthLevelItem(i)) return true;
     return false;
-  });
+  }).sort(itemCompare);
 }
 function itemStableKey(item){
   if(item.gId) return `${item.source||'google'}:${item.type}:${item.gId}`;
@@ -1164,14 +1174,15 @@ function itemCompare(a,b){
   return defaultItemCompare(a,b);
 }
 function persistOrderForDate(date){
-  const arr = S.items.filter(i=>!isMonthLevelItem(i) && i.date===date).sort((a,b)=>{
+  // 날짜별 순서뿐 아니라 월헤더(YYYY-MM) 아래 항목 순서도 로컬에 보존한다.
+  const arr = S.items.filter(i=>i.date===date).sort((a,b)=>{
     const ai = S.items.indexOf(a), bi = S.items.indexOf(b);
     return ai-bi;
   });
   arr.forEach((i,idx)=>setSavedOrder(i,idx,date));
 }
 function nextOrderForDate(date){
-  const vals = S.items.filter(i=>!isMonthLevelItem(i)&&i.date===date)
+  const vals = S.items.filter(i=>i.date===date)
     .map(i=>getSavedOrder(i,date))
     .filter(v=>v!=null);
   return vals.length ? Math.max(...vals)+1 : 0;
@@ -1871,11 +1882,21 @@ let editId = null;
 let editRepeat = 'none';
 let editDateMode = 'exact';
 
+function applyEditRepeatUI(item){
+  const r = item?.type === 'event' ? normalizeRepeatValue(item.repeat) : 'none';
+  editRepeat = r;
+  ['none','monthly','yearly'].forEach(id=>{
+    const btn = document.getElementById('erep-'+id);
+    if(btn) btn.classList.toggle('active', id===r);
+  });
+  updateEditRepeatAvailability();
+}
+
 function openEditModal(id){
   const item = S.items.find(i=>i.id===id);
   if(!item) return;
   editId = id;
-  editRepeat = item.type === 'task' ? 'none' : (item.repeat || 'none');
+  editRepeat = item.type === 'task' ? 'none' : normalizeRepeatValue(item.repeat);
   document.getElementById('editTitle').value = item.title;
   document.getElementById('editDate').value = item.monthOnly ? '' : (item.date||'');
   document.getElementById('editMonth').value = item.monthOnly ? (item.date||fmtMo(TODAY.getFullYear(),TODAY.getMonth())) : (item.date ? item.date.slice(0,7) : fmtMo(TODAY.getFullYear(),TODAY.getMonth()));
@@ -1886,7 +1907,8 @@ function openEditModal(id){
   document.getElementById('editBtnEvent').disabled = lockType;
   document.getElementById('editBtnTask').disabled = lockType;
   setEditDateMode(item.monthOnly ? 'month' : 'exact');
-  setEditRepeat(editRepeat);
+  // 반복 일정이면 편집창을 열 때 반드시 매월/매년 버튼 상태가 실제 데이터와 일치해야 한다.
+  applyEditRepeatUI(item);
   document.getElementById('editModalOverlay').classList.add('open');
   setTimeout(()=>document.getElementById('editTitle').focus(), 200);
 }
@@ -1933,6 +1955,7 @@ function setEditType(t){
   updateEditRepeatAvailability();
 }
 function setEditRepeat(r){
+  r = normalizeRepeatValue(r);
   // Google Tasks 반복 연동은 불안정하므로 반복은 일정에만 허용
   if(S._editType === 'task' && r !== 'none'){
     showToast('반복은 일정에서만 사용할 수 있어요');
@@ -1959,7 +1982,7 @@ function saveEditItem(){
     moveItemToExactDate(item, date.length===7 ? firstDayOfMonth(date) : date, document.getElementById('editTime').value);
   }
   item.note = document.getElementById('editNote').value.trim();
-  item.repeat = item.type==='event' ? editRepeat : 'none';
+  item.repeat = item.type==='event' ? normalizeRepeatValue(editRepeat) : 'none';
   save(); closeEditModal(); renderAll(); showToast('Updated');
   // push to Google. 토큰 만료/오프라인이면 pending으로 보존하고 다음 동기화 때 재시도.
   if(item.gId) gPushFullUpdate(item);
@@ -2176,10 +2199,27 @@ async function gSync(){
 async function gFetchCalendar(){
   const now = new Date();
   const twoYearsAgo = new Date(now.getFullYear()-2,0,1).toISOString();
-  const oneYearAhead = new Date(now.getFullYear()+1,11,31).toISOString();
+  // 반복 일정이 다음 해 이후에도 보이도록 충분히 넓게 가져온다.
+  const tenYearsAhead = new Date(now.getFullYear()+10,11,31).toISOString();
+
+  // 1) 반복 원본(master)을 먼저 가져와서 RRULE을 파악한다.
+  const masterRes = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events?`+
+    `timeMin=${twoYearsAgo}&timeMax=${tenYearsAhead}&singleEvents=false&maxResults=2500`,
+    {headers:{Authorization:`Bearer ${G.token}`}}
+  );
+  if(!masterRes.ok) throw new Error('캘린더 오류 '+masterRes.status);
+  const masterData = await masterRes.json();
+  const repeatMap = {};
+  (masterData.items||[]).forEach(e=>{
+    const r = repeatFromRecurrenceLines(e.recurrence);
+    if(r !== 'none') repeatMap[e.id] = r;
+  });
+
+  // 2) 화면 표시용으로 반복 인스턴스를 펼쳐서 가져온다.
   const res = await fetch(
     `https://www.googleapis.com/calendar/v3/calendars/primary/events?`+
-    `timeMin=${twoYearsAgo}&timeMax=${oneYearAhead}&singleEvents=true&orderBy=startTime&maxResults=1000`,
+    `timeMin=${twoYearsAgo}&timeMax=${tenYearsAhead}&singleEvents=true&orderBy=startTime&maxResults=2500`,
     {headers:{Authorization:`Bearer ${G.token}`}}
   );
   if(!res.ok) throw new Error('캘린더 오류 '+res.status);
@@ -2191,16 +2231,18 @@ async function gFetchCalendar(){
     const d = parseDs(rawDate);
     const taggedMonth = !!(hasMonthTag(rawTitle) && d && d.getDate()===1 && rawTime==='00:00');
     const oldItem = S.items.find(i=>i.type==='event' && i.gId===e.id);
+    const googleRepeat = repeatMap[e.recurringEventId || e.id] || 'none';
     if(oldItem?.pendingUpdateSync){
       return {
         id:'gev_'+e.id, gId:e.id, type:'event',
+        recurringEventId:e.recurringEventId || '',
         rawTitle: oldItem.rawTitle || rawTitle,
         title: oldItem.title,
         date: oldItem.date,
         time: oldItem.time || '',
         note: oldItem.note || '',
         done: !!oldItem.done,
-        repeat: oldItem.repeat || 'none',
+        repeat: normalizeRepeatValue(oldItem.repeat || googleRepeat),
         pendingDateSync: !!oldItem.pendingDateSync,
         pendingUpdateSync: true,
         monthOnly: !!oldItem.monthOnly,
@@ -2209,12 +2251,13 @@ async function gFetchCalendar(){
     }
     return {
       id:'gev_'+e.id, gId:e.id, type:'event',
+      recurringEventId:e.recurringEventId || '',
       rawTitle,
       title: taggedMonth ? stripMonthTag(rawTitle) : rawTitle,
       date: oldItem?.pendingDateSync ? oldItem.date : (taggedMonth ? monthKeyFromDate(rawDate) : rawDate),
       time: oldItem?.pendingDateSync ? (oldItem.time||'') : (taggedMonth ? '' : rawTime),
       note:e.description||'',
-      repeat: oldItem?.repeat || 'none',
+      repeat: normalizeRepeatValue(googleRepeat || oldItem?.repeat),
       // Google Calendar에는 완료 체크 상태가 없어서 웹앱 로컬 상태를 보존한다.
       done: !!oldItem?.done,
       pendingDateSync: !!oldItem?.pendingDateSync,
@@ -2228,11 +2271,8 @@ async function gFetchCalendar(){
   const nextIncomingOrder = makeIncomingOrderAllocator();
   const mergedEvents = incoming.map(newItem=>{
     const saved = getSavedOrder(newItem, newItem.date);
-    if(saved != null){
-      newItem.manualOrder = saved;
-    } else {
-      setSavedOrder(newItem, nextIncomingOrder(newItem.date), newItem.date);
-    }
+    if(saved != null) newItem.manualOrder = saved;
+    else newItem.manualOrder = nextIncomingOrder(newItem.date);
     return newItem;
   });
 
@@ -2241,6 +2281,7 @@ async function gFetchCalendar(){
     ...mergedEvents,
   ];
 }
+
 
 async function gFetchTasks(){
   const tlRes = await fetch('https://tasks.googleapis.com/tasks/v1/users/@me/lists',
