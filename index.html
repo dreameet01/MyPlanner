@@ -1046,6 +1046,34 @@ function nextDayStr(dateStr){
   d.setDate(d.getDate()+1);
   return fmtDs(d.getFullYear(), d.getMonth(), d.getDate());
 }
+
+function rememberTimeBeforeMonthOnly(item){
+  if(!item) return;
+  if(!item.monthOnly && item.time){
+    item._monthBackupTime = item.time;
+  }
+}
+function moveItemToMonthOnly(item, monthKey){
+  if(!item) return;
+  rememberTimeBeforeMonthOnly(item);
+  item.monthOnly = true;
+  item.date = monthKey && monthKey.length===10 ? monthKey.slice(0,7) : monthKey;
+  item.time = '';
+}
+function moveItemToExactDate(item, dateStr, explicitTime){
+  if(!item) return;
+  const wasMonthOnly = !!item.monthOnly;
+  item.monthOnly = false;
+  item.date = dateStr && dateStr.length===7 ? firstDayOfMonth(dateStr) : dateStr;
+  if(explicitTime !== undefined && explicitTime !== null && explicitTime !== ''){
+    item.time = explicitTime;
+  } else if(wasMonthOnly && item._monthBackupTime){
+    item.time = item._monthBackupTime;
+  } else {
+    item.time = explicitTime || '';
+  }
+}
+
 function addMinutesToLocalDateTime(dateStr, timeStr, minutes){
   const [h,mi] = (timeStr||'00:00').split(':').map(Number);
   const d = parseDs(dateStr);
@@ -1299,11 +1327,14 @@ function makeItemRow(item){
       return;
     }
 
-    // move to this item's date
+    // move to this item's date/month. If converting to/from 월헤더, preserve the original time locally.
     const oldDate = fromItem.date;
     const oldMonthOnly = !!fromItem.monthOnly;
-    fromItem.date=item.date;
-    fromItem.monthOnly=isMonthLevelItem(item)||false;
+    if(isMonthLevelItem(item)){
+      moveItemToMonthOnly(fromItem, item.date);
+    } else {
+      moveItemToExactDate(fromItem, item.date);
+    }
     const dateChanged = oldDate !== fromItem.date || oldMonthOnly !== !!fromItem.monthOnly;
 
     // determine insert position in S.items
@@ -1345,7 +1376,7 @@ function makeDayBlock(dateStr,items){
     const fromItem=S.items.find(i=>i.id===fromId); if(!fromItem) return;
     const oldDate = fromItem.date;
     const oldMonthOnly = !!fromItem.monthOnly;
-    fromItem.date=dateStr; fromItem.monthOnly=false;
+    moveItemToExactDate(fromItem, dateStr);
     const dateChanged = oldDate !== fromItem.date || oldMonthOnly !== !!fromItem.monthOnly;
     setSavedOrder(fromItem, nextOrderForDate(dateStr), dateStr);
     save(); renderAll();
@@ -1922,9 +1953,11 @@ function saveEditItem(){
   if(!date){ showToast('날짜를 입력해주세요'); return; }
   item.title = title;
   item.type = S._editType || item.type;
-  item.monthOnly = isMonth && item.type==='event';
-  item.date = item.monthOnly ? date : (date.length===7 ? firstDayOfMonth(date) : date);
-  item.time = item.monthOnly ? '' : document.getElementById('editTime').value;
+  if(isMonth && item.type==='event'){
+    moveItemToMonthOnly(item, date);
+  } else {
+    moveItemToExactDate(item, date.length===7 ? firstDayOfMonth(date) : date, document.getElementById('editTime').value);
+  }
   item.note = document.getElementById('editNote').value.trim();
   item.repeat = item.type==='event' ? editRepeat : 'none';
   save(); closeEditModal(); renderAll(); showToast('Updated');
