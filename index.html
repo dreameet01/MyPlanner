@@ -2416,6 +2416,31 @@ async function gFlushPendingCreateUpdates(){
   return allOk;
 }
 
+
+// Pending Google deletions are stored outside S.items because the local item is removed immediately.
+function getPendingDeletes(){
+  try {
+    const arr = JSON.parse(localStorage.getItem('pl_pending_deletes') || '[]');
+    return Array.isArray(arr) ? arr : [];
+  } catch(e){
+    return [];
+  }
+}
+function savePendingDeletes(arr){
+  try {
+    localStorage.setItem('pl_pending_deletes', JSON.stringify(Array.isArray(arr) ? arr : []));
+  } catch(e){}
+}
+function queuePendingDelete(item){
+  if(!item || !item.gId) return;
+  const arr = getPendingDeletes();
+  const exists = arr.some(d => d.gId === item.gId && d.type === item.type);
+  if(!exists){
+    arr.push({ type:item.type, gId:item.gId, gListId:item.gListId || '', queuedAt:Date.now() });
+    savePendingDeletes(arr);
+  }
+}
+
 async function gFlushPendingDeletes(){
   if(!isGConnected()) return false;
   const arr = getPendingDeletes();
