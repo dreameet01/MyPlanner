@@ -1,4 +1,4 @@
-<!DOCTYPE html><!-- v20260428_google_tasks_exact_rule -->
+<!DOCTYPE html><!-- v20260504_FINAL_STABILIZED_REVIEWED -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -1883,6 +1883,8 @@ let editRepeat = 'none';
 let editDateMode = 'exact';
 
 function applyEditRepeatUI(item){
+  // 편집창을 열 때 실제 반복값과 버튼 UI를 강제로 일치시킨다.
+  // Google 반복 일정에서 들어온 item.repeat(monthly/yearly)도 여기서 그대로 반영된다.
   const r = item?.type === 'event' ? normalizeRepeatValue(item.repeat) : 'none';
   editRepeat = r;
   ['none','monthly','yearly'].forEach(id=>{
@@ -1896,7 +1898,9 @@ function openEditModal(id){
   const item = S.items.find(i=>i.id===id);
   if(!item) return;
   editId = id;
-  editRepeat = item.type === 'task' ? 'none' : normalizeRepeatValue(item.repeat);
+  const itemRepeat = normalizeRepeatValue(item.repeat || repeatFromRecurrenceLines(item.recurrence));
+  item.repeat = item.type === 'event' ? itemRepeat : 'none';
+  editRepeat = item.type === 'task' ? 'none' : item.repeat;
   document.getElementById('editTitle').value = item.title;
   document.getElementById('editDate').value = item.monthOnly ? '' : (item.date||'');
   document.getElementById('editMonth').value = item.monthOnly ? (item.date||fmtMo(TODAY.getFullYear(),TODAY.getMonth())) : (item.date ? item.date.slice(0,7) : fmtMo(TODAY.getFullYear(),TODAY.getMonth()));
@@ -2205,7 +2209,7 @@ async function gFetchCalendar(){
   // 1) 반복 원본(master)을 먼저 가져와서 RRULE을 파악한다.
   const masterRes = await fetch(
     `https://www.googleapis.com/calendar/v3/calendars/primary/events?`+
-    `timeMin=${twoYearsAgo}&timeMax=${tenYearsAhead}&singleEvents=false&maxResults=2500`,
+    `singleEvents=false&showDeleted=false&maxResults=2500`,
     {headers:{Authorization:`Bearer ${G.token}`}}
   );
   if(!masterRes.ok) throw new Error('캘린더 오류 '+masterRes.status);
@@ -2240,9 +2244,11 @@ async function gFetchCalendar(){
         title: oldItem.title,
         date: oldItem.date,
         time: oldItem.time || '',
+        _monthBackupTime: oldItem._monthBackupTime || '',
         note: oldItem.note || '',
         done: !!oldItem.done,
         repeat: normalizeRepeatValue(oldItem.repeat || googleRepeat),
+        recurrence:e.recurrence || oldItem.recurrence || [],
         pendingDateSync: !!oldItem.pendingDateSync,
         pendingUpdateSync: true,
         monthOnly: !!oldItem.monthOnly,
@@ -2256,8 +2262,10 @@ async function gFetchCalendar(){
       title: taggedMonth ? stripMonthTag(rawTitle) : rawTitle,
       date: oldItem?.pendingDateSync ? oldItem.date : (taggedMonth ? monthKeyFromDate(rawDate) : rawDate),
       time: oldItem?.pendingDateSync ? (oldItem.time||'') : (taggedMonth ? '' : rawTime),
+      _monthBackupTime: oldItem?._monthBackupTime || '',
       note:e.description||'',
       repeat: normalizeRepeatValue(googleRepeat || oldItem?.repeat),
+      recurrence:e.recurrence || oldItem?.recurrence || [],
       // Google Calendar에는 완료 체크 상태가 없어서 웹앱 로컬 상태를 보존한다.
       done: !!oldItem?.done,
       pendingDateSync: !!oldItem?.pendingDateSync,
@@ -2591,28 +2599,39 @@ async function gCreateEvent(item, localId){
 async function gUpdateEvent(item){
   if(!isGConnected()||!item.gId||item.type!=='event') return false;
   try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const isRecurringInstance = !!item.recurringEventId;
+    const targetId = (isRecurringInstance && !item.pendingDateSync) ? item.recurringEventId : item.gId;
+
     const body = { summary: item.title, description: item.note||'' };
-    const isMonth = item.monthOnly || hasMonthTag(item.title);
-    if(isMonth){
-      const mDate = item.date && item.date.length===7 ? firstDayOfMonth(item.date) : item.date;
-      const dt = mDate + 'T00:00:00';
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      body.summary = hasMonthTag(item.title) ? item.title : `${MONTH_TAG} ${item.title}`;
-      body.start = {dateTime: dt, timeZone: tz};
-      body.end   = {dateTime: addMinutesToLocalDateTime(mDate, '00:00', 1), timeZone: tz};
-    } else if(item.time){
-      const dt = item.date + 'T' + item.time + ':00';
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      body.start = {dateTime: dt, timeZone: tz};
-      body.end   = {dateTime: addMinutesToLocalDateTime(item.date, item.time, 60), timeZone: tz};
+
+    // 반복 인스턴스에서 일반 수정/반복 수정은 시리즈 master에 반영한다.
+    // 단, 날짜 드래그 이동(pendingDateSync)은 해당 인스턴스 날짜 변경으로 보고 instance에만 반영한다.
+    if(isRecurringInstance && !item.pendingDateSync){
+      const rec = recurrenceForRepeat(item);
+      body.recurrence = rec || [];
     } else {
-      body.start = {date: item.date};
-      body.end   = {date: nextDayStr(item.date)};
+      const isMonth = item.monthOnly || hasMonthTag(item.title);
+      if(isMonth){
+        const mDate = item.date && item.date.length===7 ? firstDayOfMonth(item.date) : item.date;
+        const dt = mDate + 'T00:00:00';
+        body.summary = hasMonthTag(item.title) ? item.title : `${MONTH_TAG} ${item.title}`;
+        body.start = {dateTime: dt, timeZone: tz};
+        body.end   = {dateTime: addMinutesToLocalDateTime(mDate, '00:00', 1), timeZone: tz};
+      } else if(item.time){
+        const dt = item.date + 'T' + item.time + ':00';
+        body.start = {dateTime: dt, timeZone: tz};
+        body.end   = {dateTime: addMinutesToLocalDateTime(item.date, item.time, 60), timeZone: tz};
+      } else {
+        body.start = {date: item.date};
+        body.end   = {date: nextDayStr(item.date)};
+      }
+      const rec = recurrenceForRepeat(item);
+      body.recurrence = rec || [];
     }
-    const rec = recurrenceForRepeat(item);
-    body.recurrence = rec || [];
+
     const res = await fetch(
-      `https://www.googleapis.com/calendar/v3/calendars/primary/events/${item.gId}`,
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events/${targetId}`,
       { method:'PATCH',
         headers:{Authorization:`Bearer ${G.token}`,'Content-Type':'application/json'},
         body: JSON.stringify(body)
