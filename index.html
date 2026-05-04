@@ -902,14 +902,18 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
       <label class="form-label">Title</label>
       <input class="form-input" id="editTitle" placeholder="제목">
     </div>
-    <div class="form-group form-row">
-      <div>
-        <label class="form-label">Date</label>
-        <input class="form-input" type="date" id="editDate">
+    <div class="form-group">
+      <label class="form-label">Date</label>
+      <div class="date-mode-toggle">
+        <button class="date-mode-btn active" id="editBtnDateExact" onclick="setEditDateMode('exact')">날짜 지정</button>
+        <button class="date-mode-btn" id="editBtnDateMonth" onclick="setEditDateMode('month')">이달 중에</button>
       </div>
-      <div>
-        <label class="form-label">Time</label>
-        <input class="form-input" type="time" id="editTime">
+      <div id="editExactDateRow" class="form-row date-time-row">
+        <div><input class="form-input date-time-input" type="date" id="editDate"></div>
+        <div><input class="form-input date-time-input" type="time" id="editTime"></div>
+      </div>
+      <div id="editMonthOnlyRow" class="hidden">
+        <input class="form-input" type="month" id="editMonth">
       </div>
     </div>
     <div class="form-group">
@@ -1190,12 +1194,16 @@ function renderAllPreserveScroll(){
   requestAnimationFrame(()=>{ if(el) el.scrollTop=scrollY; });
 }
 function toggleDetail(id){ document.getElementById('detail_'+id)?.classList.toggle('open'); }
-function confirmDelete(id){
+async function confirmDelete(id){
   if(confirm('삭제할까요?')){
     const item = S.items.find(i=>i.id===id);
-    if(item && isGConnected() && item.gId){
-      if(item.type==='event') gDeleteEvent(item.gId);
-      else gDeleteTask(item.gId, item.gListId);
+    if(item && item.gId){
+      const okConn = await gEnsureConnected();
+      let ok = false;
+      if(okConn){
+        ok = item.type==='event' ? await gDeleteEvent(item.gId) : await gDeleteTask(item.gId, item.gListId);
+      }
+      if(!ok) queuePendingDelete(item);
     }
     S.items=S.items.filter(i=>i.id!==id);
     save();renderAll();showToast('Deleted');
@@ -1533,6 +1541,29 @@ function renderYear(){
 }
 function changeYearView(d){S.yearViewYear+=d;renderYear();}
 
+function initYearSwipe(){
+  const el = document.getElementById('viewYear');
+  if(!el || el.dataset.swipeReady==='1') return;
+  el.dataset.swipeReady = '1';
+  let sx=0, sy=0, st=0;
+  el.addEventListener('touchstart', e=>{
+    if(!e.touches || e.touches.length!==1) return;
+    const t=e.touches[0];
+    sx=t.clientX; sy=t.clientY; st=Date.now();
+  }, {passive:true});
+  el.addEventListener('touchend', e=>{
+    if(document.querySelector('.modal-overlay.open')) return;
+    const t=e.changedTouches && e.changedTouches[0];
+    if(!t) return;
+    const dx=t.clientX-sx, dy=t.clientY-sy;
+    const elapsed=Date.now()-st;
+    if(elapsed>900) return;
+    if(Math.abs(dx)<55 || Math.abs(dx)<Math.abs(dy)*1.35) return;
+    if(dx<0) changeYearView(1);
+    else changeYearView(-1);
+  }, {passive:true});
+}
+
 // ── MEMO ──
 const MEMO_COLORS = [
   {id:'white', bg:'#ffffff', border:'#e4e4e4'},
@@ -1800,29 +1831,14 @@ function saveItem(){
   else{const d=parseDs(date);S.listYear=d.getFullYear();S.selDate=date;}
   renderAll(); showToast('Saved');
 
-  // 구글에 전송
-  if(isGConnected()){
-    if(monthOnly){
-      // 이달 중에 → Google Calendar에 [이달] + 해당 월 1일 00:00으로 저장
-      // Google Tasks는 월 단위 표현이 불안정해서 사용하지 않음
-      const googleItem = {
-        ...newItem,
-        type:'event',
-        date:firstDayOfMonth(date),
-        time:'00:00',
-        title: hasMonthTag(newItem.title) ? newItem.title : `${MONTH_TAG} ${newItem.title}`
-      };
-      gCreateEvent(googleItem, newItem.id);
-    } else {
-      if(newItem.type==='event') gCreateEvent(newItem, newItem.id);
-      else gCreateTask(newItem, newItem.id);
-    }
-  }
+  // 구글에 전송. 토큰 만료/로그아웃 상태면 pending으로 저장 후 다음 동기화 때 재시도.
+  gPushCreateItem(newItem);
 }
 
 // ── EDIT MODAL ──
 let editId = null;
 let editRepeat = 'none';
+let editDateMode = 'exact';
 
 function openEditModal(id){
   const item = S.items.find(i=>i.id===id);
@@ -1831,18 +1847,38 @@ function openEditModal(id){
   editRepeat = item.type === 'task' ? 'none' : (item.repeat || 'none');
   document.getElementById('editTitle').value = item.title;
   document.getElementById('editDate').value = item.monthOnly ? '' : (item.date||'');
-  document.getElementById('editTime').value = item.time||'';
+  document.getElementById('editMonth').value = item.monthOnly ? (item.date||fmtMo(TODAY.getFullYear(),TODAY.getMonth())) : (item.date ? item.date.slice(0,7) : fmtMo(TODAY.getFullYear(),TODAY.getMonth()));
+  document.getElementById('editTime').value = item.monthOnly ? '' : (item.time||'');
   document.getElementById('editNote').value = item.note||'';
   setEditType(item.type);
   const lockType = !!item.gId;
   document.getElementById('editBtnEvent').disabled = lockType;
   document.getElementById('editBtnTask').disabled = lockType;
+  setEditDateMode(item.monthOnly ? 'month' : 'exact');
   setEditRepeat(editRepeat);
   document.getElementById('editModalOverlay').classList.add('open');
   setTimeout(()=>document.getElementById('editTitle').focus(), 200);
 }
-function closeEditModal(){ document.getElementById('editModalOverlay').classList.remove('open'); document.getElementById('editBtnEvent').disabled=false; document.getElementById('editBtnTask').disabled=false; editId=null; }
+function closeEditModal(){ document.getElementById('editModalOverlay').classList.remove('open'); document.getElementById('editBtnEvent').disabled=false; document.getElementById('editBtnTask').disabled=false; document.getElementById('editBtnDateExact').disabled=false; document.getElementById('editBtnDateMonth').disabled=false; editId=null; }
 function closeEditModalOutside(e){ if(e.target===document.getElementById('editModalOverlay')) closeEditModal(); }
+function setEditDateMode(mode){
+  const item = editId ? S.items.find(i=>i.id===editId) : null;
+  // 월헤더는 일정 전용. 할일은 월헤더로 바꾸지 못하게 막는다.
+  if(mode==='month' && (S._editType==='task' || item?.type==='task')){
+    showToast('할일은 이달 중에로 바꿀 수 없어요');
+    mode='exact';
+  }
+  editDateMode = mode;
+  const isMonth = mode==='month';
+  document.getElementById('editBtnDateExact').classList.toggle('active', !isMonth);
+  document.getElementById('editBtnDateMonth').classList.toggle('active', isMonth);
+  document.getElementById('editExactDateRow').classList.toggle('hidden', isMonth);
+  document.getElementById('editMonthOnlyRow').classList.toggle('hidden', !isMonth);
+  if(isMonth){
+    setEditType('event');
+    setEditRepeat(editRepeat && editRepeat!=='none' ? editRepeat : 'none');
+  }
+}
 function updateEditRepeatAvailability(){
   const disableRepeat = S._editType === 'task';
   ['monthly','yearly'].forEach(id=>{
@@ -1852,9 +1888,17 @@ function updateEditRepeatAvailability(){
   if(disableRepeat && editRepeat !== 'none') setEditRepeat('none');
 }
 function setEditType(t){
+  const current = editId ? S.items.find(i=>i.id===editId) : null;
+  if(current?.gId && current.type!==t){
+    showToast('Google 연동 항목은 일정/할일 타입을 바꿀 수 없어요');
+    t = current.type;
+  }
   document.getElementById('editBtnEvent').classList.toggle('active', t==='event');
   document.getElementById('editBtnTask').classList.toggle('active', t==='task');
   S._editType = t;
+  const monthBtn = document.getElementById('editBtnDateMonth');
+  if(monthBtn) monthBtn.disabled = t==='task';
+  if(t==='task' && editDateMode==='month') setEditDateMode('exact');
   updateEditRepeatAvailability();
 }
 function setEditRepeat(r){
@@ -1872,30 +1916,33 @@ function saveEditItem(){
   if(!editId) return;
   const item = S.items.find(i=>i.id===editId); if(!item) return;
   const title = document.getElementById('editTitle').value.trim();
-  const date = document.getElementById('editDate').value;
+  const isMonth = editDateMode==='month';
+  const date = isMonth ? document.getElementById('editMonth').value : document.getElementById('editDate').value;
   if(!title){ showToast('제목을 입력해주세요'); return; }
+  if(!date){ showToast('날짜를 입력해주세요'); return; }
   item.title = title;
   item.type = S._editType || item.type;
-  if(date) item.date = date;
-  item.time = document.getElementById('editTime').value;
+  item.monthOnly = isMonth && item.type==='event';
+  item.date = item.monthOnly ? date : (date.length===7 ? firstDayOfMonth(date) : date);
+  item.time = item.monthOnly ? '' : document.getElementById('editTime').value;
   item.note = document.getElementById('editNote').value.trim();
   item.repeat = item.type==='event' ? editRepeat : 'none';
   save(); closeEditModal(); renderAll(); showToast('Updated');
   // push to Google. 토큰 만료/오프라인이면 pending으로 보존하고 다음 동기화 때 재시도.
   if(item.gId) gPushFullUpdate(item);
-  else if(isGConnected()){
-    if(item.type==='event') gCreateEvent(item, item.id);
-    else gCreateTask(item, item.id);
-  }
+  else gPushCreateItem(item);
 }
-function deleteEditItem(){
+async function deleteEditItem(){
   if(!editId) return;
   if(confirm('삭제할까요?')){
     const item = S.items.find(i=>i.id===editId);
-    // delete from Google first
-    if(item && isGConnected() && item.gId){
-      if(item.type==='event') gDeleteEvent(item.gId);
-      else gDeleteTask(item.gId, item.gListId);
+    if(item && item.gId){
+      const okConn = await gEnsureConnected();
+      let ok = false;
+      if(okConn){
+        ok = item.type==='event' ? await gDeleteEvent(item.gId) : await gDeleteTask(item.gId, item.gListId);
+      }
+      if(!ok) queuePendingDelete(item);
     }
     S.items = S.items.filter(i=>i.id!==editId);
     save(); closeEditModal(); renderAll(); showToast('Deleted');
@@ -2076,6 +2123,8 @@ async function gSync(){
   if(btn){ btn.style.opacity='0.4'; btn.style.pointerEvents='none'; }
   showToast('동기화 중...');
   try {
+    await gFlushPendingDeletes();
+    await gFlushPendingCreateUpdates();
     await gFlushPendingTaskUpdates();
     await gFlushPendingDateUpdates();
     await gFlushPendingFullUpdates();
@@ -2253,10 +2302,11 @@ async function gFlushPendingTaskUpdates(){
 
 async function gPushDateChange(item){
   if(!item || !item.gId) return true;
+  // 먼저 pending으로 표시한다. 자동 동기화가 중간에 끼어도 Google의 예전 날짜로 로컬 이동을 덮어쓰지 않게 하기 위함.
+  item.pendingDateSync = true;
+  save();
   const okConn = await gEnsureConnected();
   if(!okConn){
-    item.pendingDateSync = true;
-    save();
     showToast('날짜 이동 저장됨 · 구글은 로그인 후 반영');
     return false;
   }
@@ -2265,6 +2315,7 @@ async function gPushDateChange(item){
   else if(item.type === 'task') ok = await gUpdateTask(item);
   if(ok){
     item.pendingDateSync = false;
+    showToast('날짜 이동이 구글에 반영됐어요');
   } else {
     item.pendingDateSync = true;
     showToast('날짜 이동 저장됨 · 다음 동기화 때 재시도');
@@ -2291,10 +2342,10 @@ async function gFlushPendingDateUpdates(){
 
 async function gPushFullUpdate(item){
   if(!item || !item.gId) return true;
+  item.pendingUpdateSync = true;
+  save();
   const okConn = await gEnsureConnected();
   if(!okConn){
-    item.pendingUpdateSync = true;
-    save();
     showToast('수정 저장됨 · 구글은 로그인 후 반영');
     return false;
   }
@@ -2327,6 +2378,59 @@ async function gFlushPendingFullUpdates(){
   return allOk;
 }
 
+async function gPushCreateItem(item){
+  if(!item || item.gId) return true;
+  item.pendingCreateSync = true;
+  save();
+  const okConn = await gEnsureConnected();
+  if(!okConn){
+    showToast('저장됨 · 구글은 로그인 후 반영');
+    return false;
+  }
+  let ok = true;
+  if(item.type === 'event') ok = await gCreateEvent(item, item.id);
+  else if(item.type === 'task') ok = await gCreateTask(item, item.id);
+  if(ok){
+    item.pendingCreateSync = false;
+  } else {
+    item.pendingCreateSync = true;
+    showToast('저장됨 · 다음 동기화 때 재시도');
+  }
+  save();
+  return ok;
+}
+
+async function gFlushPendingCreateUpdates(){
+  if(!isGConnected()) return false;
+  const pending = S.items.filter(i=>!i.gId && i.pendingCreateSync);
+  if(!pending.length) return true;
+  let allOk = true;
+  for(const item of pending){
+    let ok = true;
+    if(item.type === 'event') ok = await gCreateEvent(item, item.id);
+    else if(item.type === 'task') ok = await gCreateTask(item, item.id);
+    if(ok) item.pendingCreateSync = false;
+    else allOk = false;
+  }
+  save();
+  return allOk;
+}
+
+async function gFlushPendingDeletes(){
+  if(!isGConnected()) return false;
+  const arr = getPendingDeletes();
+  if(!arr.length) return true;
+  const remain = [];
+  for(const d of arr){
+    let ok = false;
+    if(d.type === 'event') ok = await gDeleteEvent(d.gId);
+    else if(d.type === 'task') ok = await gDeleteTask(d.gId, d.gListId);
+    if(!ok) remain.push(d);
+  }
+  savePendingDeletes(remain);
+  return remain.length===0;
+}
+
 // ── BIDIRECTIONAL: APP → GOOGLE ──
 
 // Get or create default task list id
@@ -2342,10 +2446,10 @@ async function gGetDefaultTaskList(){
 
 // Create event on Google Calendar
 async function gCreateEvent(item, localId){
-  if(!isGConnected()) return;
+  if(!isGConnected()) return false;
   // 중복 방지: 이미 gId 있으면 스킵
   const localItem = localId ? S.items.find(i=>i.id===localId) : item;
-  if(localItem?.gId) return;
+  if(localItem?.gId) return true;
   try {
     const body = { summary: item.title, description: item.note||'' };
     const isMonth = item.monthOnly || hasMonthTag(item.title);
@@ -2380,7 +2484,8 @@ async function gCreateEvent(item, localId){
       localItem.source = 'google';
       save();
     }
-  } catch(e){}
+    return res.ok;
+  } catch(e){ return false; }
 }
 
 // Update event on Google Calendar
@@ -2420,20 +2525,21 @@ async function gUpdateEvent(item){
 
 // Delete event from Google Calendar
 async function gDeleteEvent(gId){
-  if(!isGConnected()||!gId) return;
+  if(!isGConnected()||!gId) return false;
   try {
-    await fetch(
+    const res = await fetch(
       `https://www.googleapis.com/calendar/v3/calendars/primary/events/${gId}`,
       { method:'DELETE', headers:{Authorization:`Bearer ${G.token}`} }
     );
-  } catch(e){}
+    return res.ok || res.status===404;
+  } catch(e){ return false; }
 }
 
 // Create task on Google Tasks
 async function gCreateTask(item, localId){
-  if(!isGConnected()) return;
+  if(!isGConnected()) return false;
   const localItem = localId ? S.items.find(i=>i.id===localId) : item;
-  if(localItem?.gId) return; // 중복 방지
+  if(localItem?.gId) return true; // 중복 방지
   try {
     const listId = await gGetDefaultTaskList();
     const body = {
@@ -2456,7 +2562,8 @@ async function gCreateTask(item, localId){
       localItem.source = 'google';
       save();
     }
-  } catch(e){}
+    return res.ok;
+  } catch(e){ return false; }
 }
 
 // Update task on Google Tasks
@@ -2481,13 +2588,14 @@ async function gUpdateTask(item){
 
 // Delete task from Google Tasks
 async function gDeleteTask(gId, gListId){
-  if(!isGConnected()||!gId||!gListId) return;
+  if(!isGConnected()||!gId||!gListId) return false;
   try {
-    await fetch(
+    const res = await fetch(
       `https://tasks.googleapis.com/tasks/v1/lists/${gListId}/tasks/${gId}`,
       { method:'DELETE', headers:{Authorization:`Bearer ${G.token}`} }
     );
-  } catch(e){}
+    return res.ok || res.status===404;
+  } catch(e){ return false; }
 }
 
 
@@ -2501,6 +2609,7 @@ window.addEventListener('load', function() {
   gHandleRedirect();
   switchView('list');
   initCalSwipe();
+  initYearSwipe();
 
   // 토큰이 만료되어도 Google 로그인 세션이 살아있으면 조용히 새 토큰을 받아 계속 로그인처럼 유지
   if(G.email && !isGConnected()){
@@ -2514,7 +2623,7 @@ window.addEventListener('load', function() {
   setInterval(async ()=>{
     if(document.hidden) return;
     if(await gEnsureConnected()){
-      gFlushPendingTaskUpdates().then(()=>gFlushPendingDateUpdates()).then(()=>gFlushPendingFullUpdates()).then(()=>gFetchCalendar()).then(()=>gFetchTasks()).then(()=>{
+      gFlushPendingDeletes().then(()=>gFlushPendingCreateUpdates()).then(()=>gFlushPendingTaskUpdates()).then(()=>gFlushPendingDateUpdates()).then(()=>gFlushPendingFullUpdates()).then(()=>gFetchCalendar()).then(()=>gFetchTasks()).then(()=>{
         save();
         if(S.curView==='list') renderList(false);
         else renderAll();
