@@ -938,8 +938,7 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
       </div>
     </div>
     <div style="display:flex;gap:8px;margin-top:4px">
-      <button class="form-submit" style="background:var(--sun);flex:1" onclick="deleteEditItem()">Delete</button>
-      <button class="form-submit" style="flex:2" onclick="saveEditItem()">Save</button>
+      <button class="form-submit" style="flex:1" onclick="saveEditItem()">Save</button>
     </div>
   </div>
 </div>
@@ -1093,13 +1092,8 @@ function renderAllPreserveScroll(){
 function toggleDetail(id){ document.getElementById('detail_'+id)?.classList.toggle('open'); }
 function confirmDelete(id){
   if(confirm('삭제할까요?')){
-    const item = S.items.find(i=>i.id===id);
-    if(item && isGConnected() && item.gId){
-      if(item.type==='event') gDeleteEvent(item.gId);
-      else gDeleteTask(item.gId, item.gListId);
-    }
     S.items=S.items.filter(i=>i.id!==id);
-    save();renderAll();showToast('Deleted');
+    save();renderAll();showToast('Deleted (로컬에서만 삭제됨)');
   }
 }
 
@@ -1592,9 +1586,14 @@ function setDateMode(mode){
 function saveItem(){
   const title=document.getElementById('inputTitle').value.trim();
   let date, monthOnly=false;
-  if(S.dateMode==='month'){ date=document.getElementById('inputMonth').value; monthOnly=true; }
-  else { date=document.getElementById('inputDate').value; }
+  if(S.dateMode==='month'){
+    date=document.getElementById('inputMonth').value;
+    monthOnly=true;
+  } else {
+    date=document.getElementById('inputDate').value;
+  }
   if(!title||!date){showToast('Title and date required');return;}
+
   const newItem = {
     id:Date.now().toString(), type:S.newType, title, date, monthOnly,
     time:monthOnly?'':document.getElementById('inputTime').value,
@@ -1606,10 +1605,20 @@ function saveItem(){
   if(monthOnly){S.listYear=parseInt(date);switchView('list');}
   else{const d=parseDs(date);S.listYear=d.getFullYear();S.selDate=date;}
   renderAll(); showToast('Saved');
-  // push to Google
-  if(isGConnected()&&!monthOnly){
-    if(newItem.type==='event') gCreateEvent(newItem);
-    else gCreateTask(newItem);
+
+  // 구글에 전송
+  if(isGConnected()){
+    if(monthOnly){
+      // 이달 중에 → 해당 월 1일 00:00으로 구글에 저장
+      const [y,m] = date.split('-').map(Number);
+      const googleDate = `${y}-${String(m).padStart(2,'0')}-01`;
+      const googleItem = {...newItem, date:googleDate, time:'00:00'};
+      if(newItem.type==='event') gCreateEvent(googleItem, newItem.id);
+      else gCreateTask(googleItem, newItem.id);
+    } else {
+      if(newItem.type==='event') gCreateEvent(newItem, newItem.id);
+      else gCreateTask(newItem, newItem.id);
+    }
   }
 }
 
@@ -1664,17 +1673,9 @@ function saveEditItem(){
   }
 }
 function deleteEditItem(){
-  if(!editId) return;
-  if(confirm('삭제할까요?')){
-    const item = S.items.find(i=>i.id===editId);
-    // delete from Google first
-    if(item && isGConnected() && item.gId){
-      if(item.type==='event') gDeleteEvent(item.gId);
-      else gDeleteTask(item.gId, item.gListId);
-    }
-    S.items = S.items.filter(i=>i.id!==editId);
-    save(); closeEditModal(); renderAll(); showToast('Deleted');
-  }
+  // 삭제 기능 비활성화 - 구글 캘린더에서 직접 삭제하세요
+  showToast('삭제는 구글 캘린더에서 해주세요');
+  closeEditModal();
 }
 
 
@@ -1981,20 +1982,18 @@ async function gGetDefaultTaskList(){
 }
 
 // Create event on Google Calendar
-async function gCreateEvent(item){
-  if(!isGConnected()||item.source==='google'||item.monthOnly) return;
+async function gCreateEvent(item, localId){
+  if(!isGConnected()) return;
+  // 중복 방지: 이미 gId 있으면 스킵
+  const localItem = localId ? S.items.find(i=>i.id===localId) : item;
+  if(localItem?.gId) return;
   try {
-    const body = {
-      summary: item.title,
-      description: item.note||'',
-    };
+    const body = { summary: item.title, description: item.note||'' };
     if(item.time){
-      // timed event
       const dt = item.date + 'T' + item.time + ':00';
-      // guess timezone offset
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       body.start = {dateTime: dt, timeZone: tz};
-      body.end   = {dateTime: dt, timeZone: tz}; // same time, user can adjust in Google
+      body.end   = {dateTime: dt, timeZone: tz};
     } else {
       body.start = {date: item.date};
       body.end   = {date: item.date};
@@ -2006,10 +2005,10 @@ async function gCreateEvent(item){
         body: JSON.stringify(body)
       }
     );
-    if(res.ok){
+    if(res.ok && localItem){
       const data = await res.json();
-      item.gId = data.id;
-      item.source = 'google';
+      localItem.gId = data.id;
+      localItem.source = 'google';
       save();
     }
   } catch(e){}
@@ -2039,20 +2038,14 @@ async function gUpdateEvent(item){
   } catch(e){}
 }
 
-// Delete event from Google Calendar
-async function gDeleteEvent(gId){
-  if(!isGConnected()||!gId) return;
-  try {
-    await fetch(
-      `https://www.googleapis.com/calendar/v3/calendars/primary/events/${gId}`,
-      { method:'DELETE', headers:{Authorization:`Bearer ${G.token}`} }
-    );
-  } catch(e){}
-}
+// Delete - disabled for safety
+async function gDeleteEvent(gId){ /* 삭제 비활성화 */ }
 
 // Create task on Google Tasks
-async function gCreateTask(item){
-  if(!isGConnected()||item.source==='google'||item.monthOnly) return;
+async function gCreateTask(item, localId){
+  if(!isGConnected()) return;
+  const localItem = localId ? S.items.find(i=>i.id===localId) : item;
+  if(localItem?.gId) return; // 중복 방지
   try {
     const listId = await gGetDefaultTaskList();
     const body = {
@@ -2068,11 +2061,11 @@ async function gCreateTask(item){
         body: JSON.stringify(body)
       }
     );
-    if(res.ok){
+    if(res.ok && localItem){
       const data = await res.json();
-      item.gId = data.id;
-      item.gListId = listId;
-      item.source = 'google';
+      localItem.gId = data.id;
+      localItem.gListId = listId;
+      localItem.source = 'google';
       save();
     }
   } catch(e){}
@@ -2097,16 +2090,9 @@ async function gUpdateTask(item){
   } catch(e){}
 }
 
-// Delete task from Google Tasks
-async function gDeleteTask(gId, gListId){
-  if(!isGConnected()||!gId||!gListId) return;
-  try {
-    await fetch(
-      `https://tasks.googleapis.com/tasks/v1/lists/${gListId}/tasks/${gId}`,
-      { method:'DELETE', headers:{Authorization:`Bearer ${G.token}`} }
-    );
-  } catch(e){}
-}
+// Delete task - disabled for safety
+async function gDeleteTask(gId, gListId){ /* 삭제 비활성화 */ }
+
 
 // ── INIT ──
 window.addEventListener('load', function() {
@@ -2115,11 +2101,47 @@ window.addEventListener('load', function() {
   applyTheme(currentTheme);
   buildThemePanel();
   renderAcctPanel();
-  // schedule token refresh if already logged in
-  if(isGConnected()) gScheduleRefresh();
   gHandleRedirect();
   renderList(true);
-  // auto-sync every 5 minutes if connected
+
+  // 토큰 만료됐지만 이메일 있으면 자동 재로그인 시도
+  if(G.email && !isGConnected()){
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    const params = new URLSearchParams({
+      client_id: GOOGLE_CLIENT_ID,
+      redirect_uri: 'https://dreameet01.github.io/MyPlanner/',
+      response_type: 'token',
+      scope: GOOGLE_SCOPES,
+      prompt: 'none',
+      login_hint: G.email,
+    });
+    iframe.src = 'https://accounts.google.com/o/oauth2/v2/auth?' + params;
+    iframe.onload = ()=>{
+      try {
+        const hash = iframe.contentWindow.location.hash.slice(1);
+        const p = new URLSearchParams(hash);
+        const token = p.get('access_token');
+        const expiresIn = parseInt(p.get('expires_in')||'3600');
+        if(token){
+          G.token = token;
+          G.expiry = Date.now() + expiresIn*1000;
+          localStorage.setItem('g_token', token);
+          localStorage.setItem('g_expiry', String(G.expiry));
+          renderAcctPanel();
+          gScheduleRefresh();
+          gSync();
+        }
+      } catch(e){}
+      try { document.body.removeChild(iframe); } catch(e){}
+    };
+    document.body.appendChild(iframe);
+  } else if(isGConnected()){
+    gScheduleRefresh();
+    gSync();
+  }
+
+  // 5분마다 자동 동기화 (화면 켜져있을때만)
   setInterval(()=>{
     if(document.hidden) return;
     if(isGConnected()){
