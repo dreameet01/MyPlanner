@@ -1042,6 +1042,44 @@ function nowLabel(){
 }
 
 function save(){ try{localStorage.setItem('pl_items',JSON.stringify(S.items)); localStorage.setItem('pl_memos',JSON.stringify(S.memos)); localStorage.setItem('pl_orderMap',JSON.stringify(S.orderMap||{}));}catch(e){} }
+
+// Google Calendar 일정에는 완료 체크 필드가 없으므로, 일정 체크 상태는 별도 로컬 맵에 영구 보존한다.
+const EVENT_DONE_MAP_KEY = 'pl_event_done_map_v1';
+function getEventDoneMap(){
+  try{
+    const m = JSON.parse(localStorage.getItem(EVENT_DONE_MAP_KEY) || '{}');
+    return (m && typeof m === 'object') ? m : {};
+  }catch(e){ return {}; }
+}
+function saveEventDoneMap(map){
+  try{ localStorage.setItem(EVENT_DONE_MAP_KEY, JSON.stringify(map || {})); }catch(e){}
+}
+function eventDoneKey(item){
+  if(!item || item.type !== 'event') return '';
+  if(item.gId) return 'g:' + item.gId;
+  if(item.id) return 'l:' + item.id;
+  return '';
+}
+function getStoredEventDone(item, fallback=false){
+  const key = eventDoneKey(item);
+  if(!key) return !!fallback;
+  const map = getEventDoneMap();
+  return Object.prototype.hasOwnProperty.call(map, key) ? !!map[key] : !!fallback;
+}
+function setStoredEventDone(item, done){
+  const key = eventDoneKey(item);
+  if(!key) return;
+  const map = getEventDoneMap();
+  map[key] = !!done;
+  saveEventDoneMap(map);
+}
+function removeStoredEventDone(item){
+  const key = eventDoneKey(item);
+  if(!key) return;
+  const map = getEventDoneMap();
+  delete map[key];
+  saveEventDoneMap(map);
+}
 function load(){
   try{
     // version check - clear old demo data on upgrade
@@ -1279,6 +1317,7 @@ function toggleDone(id,e){
   e&&e.stopPropagation();
   const it=S.items.find(i=>i.id===id); if(!it)return;
   it.done=!it.done;
+  if(it.type==='event') setStoredEventDone(it, it.done);
   if(it.type==='task' && it.gId) it.pendingDoneSync = true;
   save();
   // push to Google Tasks. If token expired, silently refresh first.
@@ -2468,7 +2507,7 @@ async function gFetchCalendar(){
         time: oldItem.time || '',
         _monthBackupTime: oldItem._monthBackupTime || '',
         note: oldItem.note || '',
-        done: !!oldItem.done,
+        done: getStoredEventDone({type:'event', id:'gev_'+e.id, gId:e.id}, !!oldItem.done),
         repeat: normalizeRepeatValue(oldItem.repeat || googleRepeat),
         recurrence:e.recurrence || oldItem.recurrence || [],
         pendingDateSync: !!oldItem.pendingDateSync,
@@ -2490,8 +2529,8 @@ async function gFetchCalendar(){
       note:e.description||'',
       repeat: normalizeRepeatValue(googleRepeat || oldItem?.repeat),
       recurrence:e.recurrence || oldItem?.recurrence || [],
-      // Google Calendar에는 완료 체크 상태가 없어서 웹앱 로컬 상태를 보존한다.
-      done: !!oldItem?.done,
+      // Google Calendar에는 완료 체크 상태가 없어서 웹앱 로컬 상태를 별도 맵에서 보존한다.
+      done: getStoredEventDone({type:'event', id:'gev_'+e.id, gId:e.id}, !!oldItem?.done),
       pendingDateSync: !!oldItem?.pendingDateSync,
       pendingUpdateSync: false,
       monthOnly: oldItem?.pendingDateSync ? !!oldItem.monthOnly : taggedMonth,
@@ -2816,6 +2855,7 @@ async function gCreateEvent(item, localId){
       const data = await res.json();
       localItem.gId = data.id;
       localItem.source = 'google';
+      if(localItem.done) setStoredEventDone(localItem, true);
       save();
     }
     return res.ok;
