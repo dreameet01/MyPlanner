@@ -306,8 +306,8 @@ body {
   font-family:'SF Mono', 'Consolas', monospace;
 }
 .fab:active { transform:scale(0.92); }
-/* Calendar detail에서 수정 버튼(⋯)과 FAB가 겹치지 않도록 Cal 화면에서는 FAB를 왼쪽으로 이동 */
-.fab.cal-mode { left:16px; right:auto; }
+/* Cal 화면에서도 + 버튼은 오른쪽 아래 고정. 항목과 겹침은 하단 여백으로 해결 */
+.fab.cal-mode { right:16px; left:auto; }
 .day-detail .item-row { padding-right:10px; }
 
 /* ─── MODAL ─── */
@@ -658,9 +658,12 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
 .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
 
 
-/* Cal view: keep bottom list clear of the floating + button */
+/* Cal view: keep the selected-day list clear of the floating + button */
+#viewCal .cal-wrap {
+  padding-bottom:140px !important;
+}
 #viewCal .day-detail {
-  margin-bottom:100px;
+  margin-bottom:120px !important;
 }
 
 ::-webkit-scrollbar { width:3px; }
@@ -1878,16 +1881,43 @@ function renderAll(){
 
 
 // ── MOBILE BACK BUTTON SUPPORT ──
+let __plannerBackGuardReady = false;
+function initBackGuard(){
+  if(__plannerBackGuardReady) return;
+  __plannerBackGuardReady = true;
+  try {
+    history.replaceState({plannerBase:true}, '', location.href);
+    history.pushState({plannerGuard:true}, '', location.href);
+  } catch(e){}
+}
 function pushAppModalState(kind){
+  initBackGuard();
   try { history.pushState({plannerModal:kind}, '', location.href); } catch(e){}
+}
+function hasOpenPlannerLayer(){
+  const editOverlay = document.getElementById('editModalOverlay');
+  const addOverlay = document.getElementById('modalOverlay');
+  const memoEditor = document.getElementById('memoEditor');
+  const searchBar = document.getElementById('searchBar');
+  return !!(
+    (editOverlay && editOverlay.classList.contains('open')) ||
+    (addOverlay && addOverlay.classList.contains('open')) ||
+    (memoEditor && memoEditor.classList.contains('open')) ||
+    (searchBar && searchBar.classList.contains('open'))
+  );
 }
 window.addEventListener('popstate', function(){
   const editOverlay = document.getElementById('editModalOverlay');
   const addOverlay = document.getElementById('modalOverlay');
   const memoEditor = document.getElementById('memoEditor');
+  const searchBar = document.getElementById('searchBar');
   if(editOverlay && editOverlay.classList.contains('open')){ closeEditModal(); return; }
   if(addOverlay && addOverlay.classList.contains('open')){ closeModal(); return; }
   if(memoEditor && memoEditor.classList.contains('open')){ closeMemoEditor(); return; }
+  if(searchBar && searchBar.classList.contains('open')){ closeSearch(); return; }
+  // Prevent Android back from jumping to the previous Google OAuth page.
+  // Keep the user inside the planner page unless a modal/search layer is open.
+  try { history.pushState({plannerGuard:true}, '', location.href); } catch(e){}
 });
 
 // ── MODAL ──
@@ -2802,6 +2832,7 @@ async function gDeleteTask(gId, gListId){
 
 // ── INIT ──
 window.addEventListener('load', function() {
+  initBackGuard();
   load();
   if(S.items.length===0) seedDemo();
   applyTheme(currentTheme);
