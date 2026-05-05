@@ -447,6 +447,20 @@ body {
   font-size:9px; color:var(--text2); padding:0 2px;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.4;
 }
+.cal-range-bar {
+  height:14px; line-height:14px;
+  background:var(--month-bg); color:var(--month-fg);
+  font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size:8px; font-weight:500;
+  padding:0 3px; margin:1px -4px 2px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  opacity:0.9; border-radius:0;
+}
+.cal-range-bar.range-start { margin-left:0; border-radius:4px 0 0 4px; }
+.cal-range-bar.range-end { margin-right:0; border-radius:0 4px 4px 0; }
+.cal-range-bar.range-start.range-end { margin-left:0; margin-right:0; border-radius:4px; }
+.cal-range-bar.range-mid { color:transparent; }
+.cal-day.other .cal-range-bar { display:none; }
 .day-detail {
   background:var(--bg); border-radius:10px;
   padding:14px; border:1px solid var(--border); min-height:56px;
@@ -869,6 +883,7 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
       <label class="form-label">Date</label>
       <div class="date-mode-toggle">
         <button class="date-mode-btn active" id="btnDateExact" onclick="setDateMode('exact')">날짜 지정</button>
+        <button class="date-mode-btn" id="btnDateRange" onclick="setDateMode('range')">기간</button>
         <button class="date-mode-btn" id="btnDateMonth" onclick="setDateMode('month')">이달 중에</button>
       </div>
       <div id="exactDateRow" class="form-row date-time-row">
@@ -877,6 +892,10 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
       </div>
       <div id="monthOnlyRow" class="hidden">
         <input class="form-input" type="month" id="inputMonth">
+      </div>
+      <div id="rangeDateRow" class="form-row hidden">
+        <div><input class="form-input date-time-input" type="date" id="inputStartDate"></div>
+        <div><input class="form-input date-time-input" type="date" id="inputEndDate"></div>
       </div>
     </div>
     <div class="form-group">
@@ -918,6 +937,7 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
       <label class="form-label">Date</label>
       <div class="date-mode-toggle">
         <button class="date-mode-btn active" id="editBtnDateExact" onclick="setEditDateMode('exact')">날짜 지정</button>
+        <button class="date-mode-btn" id="editBtnDateRange" onclick="setEditDateMode('range')">기간</button>
         <button class="date-mode-btn" id="editBtnDateMonth" onclick="setEditDateMode('month')">이달 중에</button>
       </div>
       <div id="editExactDateRow" class="form-row date-time-row">
@@ -926,6 +946,10 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
       </div>
       <div id="editMonthOnlyRow" class="hidden">
         <input class="form-input" type="month" id="editMonth">
+      </div>
+      <div id="editRangeDateRow" class="form-row hidden">
+        <div><input class="form-input date-time-input" type="date" id="editStartDate"></div>
+        <div><input class="form-input date-time-input" type="date" id="editEndDate"></div>
       </div>
     </div>
     <div class="form-group">
@@ -1058,6 +1082,24 @@ function nextDayStr(dateStr){
   d.setDate(d.getDate()+1);
   return fmtDs(d.getFullYear(), d.getMonth(), d.getDate());
 }
+function prevDayStr(dateStr){
+  const d = parseDs(dateStr);
+  if(!d) return dateStr;
+  d.setDate(d.getDate()-1);
+  return fmtDs(d.getFullYear(), d.getMonth(), d.getDate());
+}
+function isRangeItem(item){ return !!(item && item.type==='event' && item.isRange && item.date && item.endDate); }
+function isDateWithinRange(item, ds){
+  if(!isRangeItem(item)) return item && item.date===ds;
+  return ds >= item.date && ds <= item.endDate;
+}
+function cloneForDisplayDate(item, ds){
+  if(!isRangeItem(item)) return item;
+  return {...item, _displayDate:ds, _displayRange:true};
+}
+function rangeLabel(item){
+  return isRangeItem(item) ? `${item.date} ~ ${item.endDate}` : '';
+}
 
 function rememberTimeBeforeMonthOnly(item){
   if(!item) return;
@@ -1162,7 +1204,7 @@ function itemStableKey(item){
   return `local:${item.id}`;
 }
 function itemOrderMapKey(item, dateOverride){
-  return `${dateOverride||item.date}|${itemStableKey(item)}`;
+  return `${dateOverride||item._displayDate||item.date}|${itemStableKey(item)}`;
 }
 function getSavedOrder(item, dateOverride){
   const key = itemOrderMapKey(item, dateOverride);
@@ -1183,7 +1225,7 @@ function defaultItemCompare(a,b){
   return (a.title||'').localeCompare(b.title||'');
 }
 function itemCompare(a,b){
-  const da = a.date || '', db = b.date || '';
+  const da = a._displayDate || a.date || '', db = b._displayDate || b.date || '';
   const dc = da.localeCompare(db);
   if(dc) return dc;
   const ao = getSavedOrder(a), bo = getSavedOrder(b);
@@ -1211,9 +1253,27 @@ function nextOrderForDate(date){
 }
 function getDayItems(y,m){
   const p=fmtMo(y,m);
-  return S.items.filter(i=>!isMonthLevelItem(i)&&i.date&&i.date.startsWith(p)).sort(itemCompare);
+  const first = `${p}-01`;
+  const last = fmtDs(y,m,new Date(y,m+1,0).getDate());
+  const out=[];
+  S.items.forEach(i=>{
+    if(isMonthLevelItem(i) || !i.date) return;
+    if(isRangeItem(i)){
+      if(i.endDate < first || i.date > last) return;
+      const start = i.date > first ? i.date : first;
+      const end = i.endDate < last ? i.endDate : last;
+      let d=parseDs(start); const e=parseDs(end);
+      while(d && e && d<=e){
+        out.push(cloneForDisplayDate(i, fmtDs(d.getFullYear(),d.getMonth(),d.getDate())));
+        d.setDate(d.getDate()+1);
+      }
+    } else if(i.date.startsWith(p)) out.push(i);
+  });
+  return out.sort(itemCompare);
 }
-function getForDate(ds){ return S.items.filter(i=>!isMonthLevelItem(i)&&i.date===ds).sort(itemCompare); }
+function getForDate(ds){
+  return S.items.filter(i=>!isMonthLevelItem(i)&&isDateWithinRange(i,ds)).map(i=>cloneForDisplayDate(i,ds)).sort(itemCompare);
+}
 
 function toggleDone(id,e){
   e&&e.stopPropagation();
@@ -1305,13 +1365,14 @@ function makeItemRow(item){
   const row=document.createElement('div');
   row.className='item-row'+(item.done?' done':'')+(item.type==='event'?' is-event':'');
   row.dataset.id=item.id;
-  row.draggable=true;
+  row.draggable=!isRangeItem(item);
 
   // drag handle
   const handle=document.createElement('span');
   handle.className='drag-handle'; handle.textContent='⠿';
-  handle.title='드래그로 순서 변경';
+  handle.title=isRangeItem(item)?'기간 일정은 드래그할 수 없어요':'드래그로 순서 변경';
   row.appendChild(handle);
+  if(isRangeItem(item)){ handle.style.opacity='0.25'; handle.style.cursor='not-allowed'; }
 
   const cb=document.createElement('div');
   cb.className=`cb ${item.type==='task'?'task-cb':'event-cb'} ${item.done?'checked':''}`;
@@ -1319,6 +1380,7 @@ function makeItemRow(item){
   row.appendChild(cb);
 
   const main=document.createElement('div'); main.className='item-main';
+  let detailEl = null;
   const line=document.createElement('div'); line.className='item-line';
   // 월 레벨 아이템이면 시간 표시 안 함
   const isMonthLevel = isMonthLevelItem(item);
@@ -1328,6 +1390,10 @@ function makeItemRow(item){
   }
   const ts=document.createElement('span'); ts.className='item-title-text'; ts.textContent=item.title;
   line.appendChild(ts);
+  if(isRangeItem(item)){
+    const tag=document.createElement('span'); tag.className='item-repeat-tag';
+    tag.textContent='기간'; line.appendChild(tag);
+  }
 
   const REPEAT_LABELS={'monthly':'매월','yearly':'매년'};
   if(item.repeat && item.repeat!=='none' && REPEAT_LABELS[item.repeat]){
@@ -1336,15 +1402,16 @@ function makeItemRow(item){
   }
   main.appendChild(line);
 
-  if(item.note){
+  if(item.note || isRangeItem(item)){
     const d=document.createElement('div'); d.className='item-detail-area';
-    d.id='detail_'+item.id; d.textContent=item.note; main.appendChild(d);
+    d.id='detail_'+item.id+(item._displayDate?'_'+item._displayDate:''); d.textContent=(isRangeItem(item)?rangeLabel(item)+(item.note?'\n':''):'') + (item.note||''); main.appendChild(d);
+    detailEl = d;
   }
 
   // tap = toggle detail (no edit)
   main.onclick=e=>{
     if(e.target.closest('.cb')||e.target.closest('.drag-handle')) return;
-    if(item.note) toggleDetail(item.id);
+    if(detailEl) detailEl.classList.toggle('open');
   };
   row.appendChild(main);
 
@@ -1392,6 +1459,7 @@ function makeItemRow(item){
     if(fromId===item.id) return;
     const fromItem=S.items.find(i=>i.id===fromId);
     if(!fromItem) return;
+    if(isRangeItem(fromItem)){ showToast('기간 일정은 드래그 이동할 수 없어요'); return; }
     const targetIsMonthLevel = isMonthLevelItem(item);
     const targetDate = item.date;
     if(fromItem.type==='task' && targetIsMonthLevel){
@@ -1450,6 +1518,7 @@ function makeDayBlock(dateStr,items){
     e.preventDefault(); hdr.style.background='';
     const fromId=e.dataTransfer.getData('text/plain');
     const fromItem=S.items.find(i=>i.id===fromId); if(!fromItem) return;
+    if(isRangeItem(fromItem)){ showToast('기간 일정은 드래그 이동할 수 없어요'); return; }
     if(isGoogleRepeatEvent(fromItem) && (fromItem.date !== dateStr || !!fromItem.monthOnly)){
       showToast('반복 일정 날짜 이동은 Google Calendar에서 해주세요');
       return;
@@ -1534,7 +1603,7 @@ function renderList(autoScroll){
       block.appendChild(e);
     } else {
       const byDate={};
-      dayItems.forEach(i=>{if(!byDate[i.date])byDate[i.date]=[];byDate[i.date].push(i);});
+      dayItems.forEach(i=>{const k=i._displayDate||i.date; if(!byDate[k])byDate[k]=[];byDate[k].push(i);});
       // sort: if manualOrder set use that, else events first → timed → untimed
       Object.keys(byDate).sort().forEach(ds=>{
 byDate[ds].sort(itemCompare);
@@ -1568,16 +1637,30 @@ function renderCal(){
     const ds=fmtDs(ry,rm,c.d);
     const isToday=ds===TODAYSTR, isSel=S.selDate===ds, dow=new Date(ry,rm,c.d).getDay();
     const dayItems=getForDate(ds);
+    const rangeItems=dayItems.filter(item=>isRangeItem(item));
+    const normalItems=dayItems.filter(item=>!isRangeItem(item));
     const cell=document.createElement('div');
     cell.className=`cal-day${c.other?' other':''}${isToday?' today':''}${isSel?' selected':''}${dow===0?' sun':dow===6?' sat':''}`;
     cell.onclick=()=>selectCalDate(ds);
     const dn=document.createElement('div'); dn.className='dn'; dn.textContent=c.d; cell.appendChild(dn);
-    if(dayItems.length){
+    if(rangeItems.length){
+      rangeItems.slice(0,2).forEach(item=>{
+        const bar=document.createElement('div');
+        const isStart=ds===item.date;
+        const isEnd=ds===item.endDate;
+        bar.className=`cal-range-bar ${isStart?'range-start':'range-mid'} ${isEnd?'range-end':''}`;
+        bar.title=`${item.title} (${rangeLabel(item)})`;
+        // 월 중간부터 보이는 기간 일정은 1일 칸에도 제목을 보여준다.
+        bar.textContent=(isStart || c.d===1) ? item.title : '';
+        cell.appendChild(bar);
+      });
+    }
+    if(normalItems.length){
       const dots=document.createElement('div'); dots.className='cal-dots';
-      dayItems.slice(0,5).forEach(item=>{const dot=document.createElement('div');dot.className=`dot ${item.type==='event'?'dot-ev':'dot-tk'}`;dots.appendChild(dot);});
+      normalItems.slice(0,5).forEach(item=>{const dot=document.createElement('div');dot.className=`dot ${item.type==='event'?'dot-ev':'dot-tk'}`;dots.appendChild(dot);});
       cell.appendChild(dots);
       const chip=document.createElement('div'); chip.className='cal-chip-text';
-      chip.textContent=(dayItems[0].time?dayItems[0].time+' ':'')+dayItems[0].title;
+      chip.textContent=(normalItems[0].time?normalItems[0].time+' ':'')+normalItems[0].title;
       cell.appendChild(chip);
     }
     container.appendChild(cell);
@@ -1927,6 +2010,8 @@ function openModal(){
   document.getElementById('modalOverlay').classList.add('open');
   document.getElementById('inputDate').value=S.selDate||fmtDs(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate());
   document.getElementById('inputMonth').value=`${TODAY.getFullYear()}-${String(TODAY.getMonth()+1).padStart(2,'0')}`;
+  document.getElementById('inputStartDate').value=S.selDate||fmtDs(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate());
+  document.getElementById('inputEndDate').value=S.selDate||fmtDs(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate());
   document.getElementById('inputTitle').value='';
   document.getElementById('inputTime').value='';
   document.getElementById('inputNote').value='';
@@ -1936,7 +2021,7 @@ function openModal(){
 function closeModal(){document.getElementById('modalOverlay').classList.remove('open');}
 function closeModalOutside(e){if(e.target===document.getElementById('modalOverlay'))closeModal();}
 function updateRepeatAvailability(){
-  const disableRepeat = S.newType === 'task';
+  const disableRepeat = S.newType === 'task' || S.dateMode === 'range';
   ['monthly','yearly'].forEach(id=>{
     const btn = document.getElementById('rep-'+id);
     if(btn) btn.disabled = disableRepeat;
@@ -1945,8 +2030,8 @@ function updateRepeatAvailability(){
 }
 function setType(t){
   // '이달 중에'는 Google Tasks와 안정적으로 맞지 않아서 일정만 허용
-  if(S.dateMode==='month' && t==='task'){
-    showToast('이달 중에는 일정만 저장돼요');
+  if((S.dateMode==='month'||S.dateMode==='range') && t==='task'){
+    showToast(S.dateMode==='range'?'기간은 일정만 저장돼요':'이달 중에는 일정만 저장돼요');
     t='event';
   }
   S.newType=t;
@@ -1957,29 +2042,38 @@ function setType(t){
 function setDateMode(mode){
   S.dateMode=mode;
   const isMonth = mode==='month';
+  const isRange = mode==='range';
   document.getElementById('btnDateExact').classList.toggle('active',mode==='exact');
+  document.getElementById('btnDateRange').classList.toggle('active',isRange);
   document.getElementById('btnDateMonth').classList.toggle('active',isMonth);
-  document.getElementById('exactDateRow').classList.toggle('hidden',isMonth);
+  document.getElementById('exactDateRow').classList.toggle('hidden',isMonth||isRange);
   document.getElementById('monthOnlyRow').classList.toggle('hidden',!isMonth);
-  document.getElementById('btnTask').disabled = isMonth;
-  if(isMonth) setType('event');
+  document.getElementById('rangeDateRow').classList.toggle('hidden',!isRange);
+  document.getElementById('btnTask').disabled = isMonth || isRange;
+  if(isMonth || isRange){ setType('event'); setRepeat('none'); }
+  updateRepeatAvailability();
 }
 function saveItem(){
   const title=document.getElementById('inputTitle').value.trim();
-  let date, monthOnly=false;
+  let date, monthOnly=false, isRange=false, endDate='';
   if(S.dateMode==='month'){
     date=document.getElementById('inputMonth').value;
     monthOnly=true;
+  } else if(S.dateMode==='range'){
+    date=document.getElementById('inputStartDate').value;
+    endDate=document.getElementById('inputEndDate').value;
+    isRange=true;
+    if(endDate && date && endDate < date){ showToast('종료일이 시작일보다 빠릅니다'); return; }
   } else {
     date=document.getElementById('inputDate').value;
   }
-  if(!title||!date){showToast('Title and date required');return;}
+  if(!title||!date||(isRange&&!endDate)){showToast('Title and date required');return;}
 
   const newItem = {
-    id:Date.now().toString(), type:S.newType, title, date, monthOnly,
-    time:monthOnly?'':document.getElementById('inputTime').value,
+    id:Date.now().toString(), type:S.newType, title, date, monthOnly, isRange, endDate,
+    time:(monthOnly||isRange)?'':document.getElementById('inputTime').value,
     note:document.getElementById('inputNote').value.trim(),
-    done:false, repeat:S.newType==='event' ? currentRepeat : 'none'
+    done:false, repeat:(S.newType==='event' && !isRange) ? currentRepeat : 'none'
   };
   S.items.push(newItem);
   save(); closeModal();
@@ -2021,42 +2115,44 @@ function openEditModal(id){
   item.repeat = item.type === 'event' ? itemRepeat : 'none';
   editRepeat = item.type === 'task' ? 'none' : item.repeat;
   document.getElementById('editTitle').value = item.title;
-  document.getElementById('editDate').value = item.monthOnly ? '' : (item.date||'');
+  document.getElementById('editDate').value = (item.monthOnly || item.isRange) ? '' : (item.date||'');
   document.getElementById('editMonth').value = item.monthOnly ? (item.date||fmtMo(TODAY.getFullYear(),TODAY.getMonth())) : (item.date ? item.date.slice(0,7) : fmtMo(TODAY.getFullYear(),TODAY.getMonth()));
-  document.getElementById('editTime').value = item.monthOnly ? '' : (item.time||'');
+  document.getElementById('editStartDate').value = item.isRange ? (item.date||'') : '';
+  document.getElementById('editEndDate').value = item.isRange ? (item.endDate||'') : '';
+  document.getElementById('editTime').value = (item.monthOnly || item.isRange) ? '' : (item.time||'');
   document.getElementById('editNote').value = item.note||'';
   setEditType(item.type);
   const lockType = !!item.gId;
   document.getElementById('editBtnEvent').disabled = lockType;
   document.getElementById('editBtnTask').disabled = lockType;
-  setEditDateMode(item.monthOnly ? 'month' : 'exact');
+  setEditDateMode(item.isRange ? 'range' : (item.monthOnly ? 'month' : 'exact'));
   // 반복 일정이면 편집창을 열 때 반드시 매월/매년 버튼 상태가 실제 데이터와 일치해야 한다.
   applyEditRepeatUI(item);
   document.getElementById('editModalOverlay').classList.add('open');
   setTimeout(()=>document.getElementById('editTitle').focus(), 200);
 }
-function closeEditModal(){ document.getElementById('editModalOverlay').classList.remove('open'); document.getElementById('editBtnEvent').disabled=false; document.getElementById('editBtnTask').disabled=false; document.getElementById('editBtnDateExact').disabled=false; document.getElementById('editBtnDateMonth').disabled=false; editId=null; }
+function closeEditModal(){ document.getElementById('editModalOverlay').classList.remove('open'); document.getElementById('editBtnEvent').disabled=false; document.getElementById('editBtnTask').disabled=false; document.getElementById('editBtnDateExact').disabled=false; document.getElementById('editBtnDateRange').disabled=false; document.getElementById('editBtnDateMonth').disabled=false; editId=null; }
 function closeEditModalOutside(e){ if(e.target===document.getElementById('editModalOverlay')) closeEditModal(); }
 function setEditDateMode(mode){
   const item = editId ? S.items.find(i=>i.id===editId) : null;
-  // 월헤더는 일정 전용. 할일은 월헤더로 바꾸지 못하게 막는다.
-  if(mode==='month' && (S._editType==='task' || item?.type==='task')){
-    showToast('할일은 이달 중에로 바꿀 수 없어요');
+  if((mode==='month'||mode==='range') && (S._editType==='task' || item?.type==='task')){
+    showToast(mode==='range'?'할일은 기간 일정으로 바꿀 수 없어요':'할일은 이달 중에로 바꿀 수 없어요');
     mode='exact';
   }
   editDateMode = mode;
   const isMonth = mode==='month';
-  document.getElementById('editBtnDateExact').classList.toggle('active', !isMonth);
+  const isRange = mode==='range';
+  document.getElementById('editBtnDateExact').classList.toggle('active', mode==='exact');
+  document.getElementById('editBtnDateRange').classList.toggle('active', isRange);
   document.getElementById('editBtnDateMonth').classList.toggle('active', isMonth);
-  document.getElementById('editExactDateRow').classList.toggle('hidden', isMonth);
+  document.getElementById('editExactDateRow').classList.toggle('hidden', isMonth||isRange);
   document.getElementById('editMonthOnlyRow').classList.toggle('hidden', !isMonth);
-  if(isMonth){
-    setEditType('event');
-    setEditRepeat(editRepeat && editRepeat!=='none' ? editRepeat : 'none');
-  }
+  document.getElementById('editRangeDateRow').classList.toggle('hidden', !isRange);
+  if(isMonth || isRange){ setEditType('event'); setEditRepeat('none'); }
+  updateEditRepeatAvailability();
 }
 function updateEditRepeatAvailability(){
-  const disableRepeat = S._editType === 'task';
+  const disableRepeat = S._editType === 'task' || editDateMode === 'range';
   ['monthly','yearly'].forEach(id=>{
     const btn = document.getElementById('erep-'+id);
     if(btn) btn.disabled = disableRepeat;
@@ -2073,8 +2169,10 @@ function setEditType(t){
   document.getElementById('editBtnTask').classList.toggle('active', t==='task');
   S._editType = t;
   const monthBtn = document.getElementById('editBtnDateMonth');
+  const rangeBtn = document.getElementById('editBtnDateRange');
   if(monthBtn) monthBtn.disabled = t==='task';
-  if(t==='task' && editDateMode==='month') setEditDateMode('exact');
+  if(rangeBtn) rangeBtn.disabled = t==='task';
+  if(t==='task' && (editDateMode==='month'||editDateMode==='range')) setEditDateMode('exact');
   updateEditRepeatAvailability();
 }
 function setEditRepeat(r){
@@ -2099,18 +2197,25 @@ function saveEditItem(){
   }
   const title = document.getElementById('editTitle').value.trim();
   const isMonth = editDateMode==='month';
-  const date = isMonth ? document.getElementById('editMonth').value : document.getElementById('editDate').value;
+  const isRange = editDateMode==='range';
+  const date = isMonth ? document.getElementById('editMonth').value : (isRange ? document.getElementById('editStartDate').value : document.getElementById('editDate').value);
+  const endDate = isRange ? document.getElementById('editEndDate').value : '';
   if(!title){ showToast('제목을 입력해주세요'); return; }
-  if(!date){ showToast('날짜를 입력해주세요'); return; }
+  if(!date || (isRange && !endDate)){ showToast('날짜를 입력해주세요'); return; }
+  if(isRange && endDate < date){ showToast('종료일이 시작일보다 빠릅니다'); return; }
   item.title = title;
   item.type = S._editType || item.type;
-  if(isMonth && item.type==='event'){
+  if(isRange && item.type==='event'){
+    item.monthOnly=false; item.isRange=true; item.date=date; item.endDate=endDate; item.time=''; item.repeat='none';
+  } else if(isMonth && item.type==='event'){
+    item.isRange=false; item.endDate='';
     moveItemToMonthOnly(item, date);
   } else {
+    item.isRange=false; item.endDate='';
     moveItemToExactDate(item, date.length===7 ? firstDayOfMonth(date) : date, document.getElementById('editTime').value);
   }
   item.note = document.getElementById('editNote').value.trim();
-  item.repeat = item.type==='event' ? normalizeRepeatValue(editRepeat) : 'none';
+  item.repeat = (item.type==='event' && !item.isRange) ? normalizeRepeatValue(editRepeat) : 'none';
   save(); closeEditModal(); renderAll(); showToast('Updated');
   // push to Google. 토큰 만료/오프라인이면 pending으로 보존하고 다음 동기화 때 재시도.
   if(item.gId) gPushFullUpdate(item);
@@ -2345,6 +2450,8 @@ async function gFetchCalendar(){
     const rawTitle = e.summary || '(제목 없음)';
     const rawDate = (e.start.date||e.start.dateTime||'').slice(0,10);
     const rawTime = e.start.dateTime ? e.start.dateTime.slice(11,16) : '';
+    const allDayEnd = e.start.date && e.end?.date ? prevDayStr(e.end.date) : '';
+    const isMultiDayRange = !!(e.start.date && allDayEnd && allDayEnd > rawDate);
     const d = parseDs(rawDate);
     const taggedMonth = !!(hasMonthTag(rawTitle) && d && d.getDate()===1 && rawTime==='00:00');
     const oldItem = S.items.find(i=>i.type==='event' && i.gId===e.id);
@@ -2356,6 +2463,8 @@ async function gFetchCalendar(){
         rawTitle: oldItem.rawTitle || rawTitle,
         title: oldItem.title,
         date: oldItem.date,
+        endDate: oldItem.endDate || '',
+        isRange: !!oldItem.isRange,
         time: oldItem.time || '',
         _monthBackupTime: oldItem._monthBackupTime || '',
         note: oldItem.note || '',
@@ -2374,7 +2483,9 @@ async function gFetchCalendar(){
       rawTitle,
       title: taggedMonth ? stripMonthTag(rawTitle) : rawTitle,
       date: oldItem?.pendingDateSync ? oldItem.date : (taggedMonth ? monthKeyFromDate(rawDate) : rawDate),
-      time: oldItem?.pendingDateSync ? (oldItem.time||'') : (taggedMonth ? '' : rawTime),
+      endDate: oldItem?.pendingDateSync ? (oldItem.endDate||'') : (isMultiDayRange ? allDayEnd : ''),
+      isRange: oldItem?.pendingDateSync ? !!oldItem.isRange : !!isMultiDayRange,
+      time: oldItem?.pendingDateSync ? (oldItem.time||'') : (taggedMonth || isMultiDayRange ? '' : rawTime),
       _monthBackupTime: oldItem?._monthBackupTime || '',
       note:e.description||'',
       repeat: normalizeRepeatValue(googleRepeat || oldItem?.repeat),
@@ -2673,7 +2784,10 @@ async function gCreateEvent(item, localId){
   try {
     const body = { summary: item.title, description: item.note||'' };
     const isMonth = item.monthOnly || hasMonthTag(item.title);
-    if(isMonth){
+    if(isRangeItem(item)){
+      body.start = {date: item.date};
+      body.end   = {date: nextDayStr(item.endDate)};
+    } else if(isMonth){
       const mDate = item.date && item.date.length===7 ? firstDayOfMonth(item.date) : item.date;
       const dt = mDate + 'T00:00:00';
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -2689,7 +2803,7 @@ async function gCreateEvent(item, localId){
       body.start = {date: item.date};
       body.end   = {date: nextDayStr(item.date)};
     }
-    const rec = recurrenceForRepeat(item);
+    const rec = isRangeItem(item) ? null : recurrenceForRepeat(item);
     if(rec) body.recurrence = rec;
     const res = await fetch(
       'https://www.googleapis.com/calendar/v3/calendars/primary/events',
@@ -2721,11 +2835,14 @@ async function gUpdateEvent(item){
     // 반복 인스턴스에서 일반 수정/반복 수정은 시리즈 master에 반영한다.
     // 단, 날짜 드래그 이동(pendingDateSync)은 해당 인스턴스 날짜 변경으로 보고 instance에만 반영한다.
     if(isRecurringInstance && !item.pendingDateSync){
-      const rec = recurrenceForRepeat(item);
+      const rec = isRangeItem(item) ? null : recurrenceForRepeat(item);
       body.recurrence = rec || [];
     } else {
       const isMonth = item.monthOnly || hasMonthTag(item.title);
-      if(isMonth){
+      if(isRangeItem(item)){
+        body.start = {date: item.date};
+        body.end   = {date: nextDayStr(item.endDate)};
+      } else if(isMonth){
         const mDate = item.date && item.date.length===7 ? firstDayOfMonth(item.date) : item.date;
         const dt = mDate + 'T00:00:00';
         body.summary = hasMonthTag(item.title) ? item.title : `${MONTH_TAG} ${item.title}`;
@@ -2739,7 +2856,7 @@ async function gUpdateEvent(item){
         body.start = {date: item.date};
         body.end   = {date: nextDayStr(item.date)};
       }
-      const rec = recurrenceForRepeat(item);
+      const rec = isRangeItem(item) ? null : recurrenceForRepeat(item);
       body.recurrence = rec || [];
     }
 
