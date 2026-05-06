@@ -180,6 +180,15 @@ body {
   font-family:'SF Mono', 'Consolas', monospace;
   font-size:10px; letter-spacing:1px; opacity:0.4;
 }
+.month-hdr-right { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.month-done-toggle {
+  background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.18);
+  color:var(--month-fg); border-radius:999px; padding:3px 7px;
+  font-family:'SF Mono','Consolas',monospace; font-size:9px; cursor:pointer;
+  opacity:0.82; white-space:nowrap; order:1;
+}
+.month-hdr-right .month-hdr-year { order:2; }
+.month-done-toggle:active { opacity:1; transform:scale(0.98); }
 
 /* month-level items */
 .month-items { padding:4px 0 2px; }
@@ -1019,7 +1028,7 @@ const TODAY = new Date();
 const TODAYSTR = fmtDs(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate());
 
 let S = {
-  items:[], memos:[], orderMap:{},
+  items:[], memos:[], orderMap:{}, doneArchiveOpen:{},
   curView:'list',
   listYear:TODAY.getFullYear(),
   calYear:TODAY.getFullYear(), calMonth:TODAY.getMonth(),
@@ -1041,7 +1050,7 @@ function nowLabel(){
   return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')} ${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}`;
 }
 
-function save(){ try{localStorage.setItem('pl_items',JSON.stringify(S.items)); localStorage.setItem('pl_memos',JSON.stringify(S.memos)); localStorage.setItem('pl_orderMap',JSON.stringify(S.orderMap||{}));}catch(e){} }
+function save(){ try{localStorage.setItem('pl_items',JSON.stringify(S.items)); localStorage.setItem('pl_memos',JSON.stringify(S.memos)); localStorage.setItem('pl_orderMap',JSON.stringify(S.orderMap||{})); localStorage.setItem('pl_done_archive_open',JSON.stringify(S.doneArchiveOpen||{}));}catch(e){} }
 
 // Google Calendar 일정에는 완료 체크 필드가 없으므로, 일정 체크 상태는 별도 로컬 맵에 영구 보존한다.
 const EVENT_DONE_MAP_KEY = 'pl_event_done_map_v1';
@@ -1054,31 +1063,50 @@ function getEventDoneMap(){
 function saveEventDoneMap(map){
   try{ localStorage.setItem(EVENT_DONE_MAP_KEY, JSON.stringify(map || {})); }catch(e){}
 }
+function eventDoneKeys(item){
+  if(!item || item.type !== 'event') return [];
+  const keys = [];
+  if(item.gId) keys.push('g:' + item.gId);
+  if(item.id) keys.push('l:' + item.id);
+  // 반복/기간/월헤더 등 Google이 다시 펼쳐 보낼 때도 최대한 같은 항목으로 인식하기 위한 보조 키
+  if(item.recurringEventId && item.date) keys.push('r:' + item.recurringEventId + ':' + item.date);
+  if(item.rawTitle && item.date) keys.push('t:' + item.rawTitle + ':' + item.date);
+  if(item.title && item.date) keys.push('t:' + item.title + ':' + item.date);
+  return [...new Set(keys.filter(Boolean))];
+}
 function eventDoneKey(item){
-  if(!item || item.type !== 'event') return '';
-  if(item.gId) return 'g:' + item.gId;
-  if(item.id) return 'l:' + item.id;
-  return '';
+  return eventDoneKeys(item)[0] || '';
 }
 function getStoredEventDone(item, fallback=false){
-  const key = eventDoneKey(item);
-  if(!key) return !!fallback;
+  const keys = eventDoneKeys(item);
+  if(!keys.length) return !!fallback;
   const map = getEventDoneMap();
-  return Object.prototype.hasOwnProperty.call(map, key) ? !!map[key] : !!fallback;
+  for(const key of keys){
+    if(Object.prototype.hasOwnProperty.call(map, key)) return !!map[key];
+  }
+  return !!fallback;
 }
 function setStoredEventDone(item, done){
-  const key = eventDoneKey(item);
-  if(!key) return;
+  const keys = eventDoneKeys(item);
+  if(!keys.length) return;
   const map = getEventDoneMap();
-  map[key] = !!done;
+  keys.forEach(key=>{ map[key] = !!done; });
   saveEventDoneMap(map);
 }
 function removeStoredEventDone(item){
-  const key = eventDoneKey(item);
-  if(!key) return;
+  const keys = eventDoneKeys(item);
+  if(!keys.length) return;
   const map = getEventDoneMap();
-  delete map[key];
+  keys.forEach(key=>delete map[key]);
   saveEventDoneMap(map);
+}
+function migrateEventDoneFromItems(){
+  // 예전 버전에서 S.items 안의 done 값만 갖고 있던 일정 체크를 새 로컬 맵으로 옮긴다.
+  try{
+    (S.items||[]).forEach(item=>{
+      if(item && item.type==='event' && item.done) setStoredEventDone(item, true);
+    });
+  }catch(e){}
 }
 function load(){
   try{
@@ -1091,9 +1119,11 @@ function load(){
     }
     const it=JSON.parse(localStorage.getItem('pl_items')); if(Array.isArray(it)){
       S.items=it.map(item=> item && item.repeat==='lunar' ? {...item, repeat:'yearly'} : item);
+      migrateEventDoneFromItems();
     }
     const me=JSON.parse(localStorage.getItem('pl_memos')); if(Array.isArray(me))S.memos=me;
     const om=JSON.parse(localStorage.getItem('pl_orderMap')); if(om&&typeof om==='object')S.orderMap=om;
+    const dao=JSON.parse(localStorage.getItem('pl_done_archive_open')); if(dao&&typeof dao==='object')S.doneArchiveOpen=dao;
   }catch(e){}
 }
 
@@ -1615,6 +1645,22 @@ function scrollToRelevantListTarget(){
   if(monthEl) monthEl.scrollIntoView({behavior:'auto', block:'start'});
 }
 
+
+function monthDoneArchiveKey(y,m){ return `${y}-${String(m+1).padStart(2,'0')}`; }
+function isPastFullyDoneDate(ds, items){
+  if(!ds || ds >= TODAYSTR) return false;
+  if(!items || !items.length) return false;
+  return items.every(i=>!!i.done);
+}
+function toggleMonthDoneArchive(y,m,e){
+  if(e) e.stopPropagation();
+  const key=monthDoneArchiveKey(y,m);
+  S.doneArchiveOpen = S.doneArchiveOpen || {};
+  S.doneArchiveOpen[key] = !S.doneArchiveOpen[key];
+  save();
+  renderList(false);
+}
+
 function renderList(autoScroll){
   if(autoScroll!==false){
     const target = getRelevantListTarget();
@@ -1629,7 +1675,33 @@ function renderList(autoScroll){
     const dayItems=getDayItems(S.listYear,m);
     const block=document.createElement('div'); block.className='month-block';
     const hdr=document.createElement('div'); hdr.className='month-hdr'; hdr.id='month_'+S.listYear+'_'+m;
-    hdr.innerHTML=`<div class="month-hdr-name">${MONTHS_EN[m]}</div><div class="month-hdr-year">${S.listYear}</div>`;
+
+    const byDate={};
+    dayItems.forEach(i=>{const k=i._displayDate||i.date; if(!byDate[k])byDate[k]=[];byDate[k].push(i);});
+    const allDates=Object.keys(byDate).sort();
+    const hiddenDoneDates=allDates.filter(ds=>isPastFullyDoneDate(ds, byDate[ds]));
+    const archiveKey=monthDoneArchiveKey(S.listYear,m);
+    const showDoneArchive=!!(S.doneArchiveOpen && S.doneArchiveOpen[archiveKey]);
+
+    const titleWrap=document.createElement('div');
+    titleWrap.className='month-hdr-name';
+    titleWrap.textContent=MONTHS_EN[m];
+    const right=document.createElement('div');
+    right.className='month-hdr-right';
+    if(hiddenDoneDates.length){
+      const toggle=document.createElement('button');
+      toggle.className='month-done-toggle';
+      toggle.type='button';
+      toggle.textContent=showDoneArchive?'완료 숨김':'완료 보기';
+      toggle.onclick=(e)=>toggleMonthDoneArchive(S.listYear,m,e);
+      right.appendChild(toggle);
+    }
+    const year=document.createElement('div');
+    year.className='month-hdr-year';
+    year.textContent=S.listYear;
+    right.appendChild(year);
+    hdr.appendChild(titleWrap);
+    hdr.appendChild(right);
     block.appendChild(hdr);
 
     if(monthItems.length){
@@ -1641,11 +1713,9 @@ function renderList(autoScroll){
       const e=document.createElement('div'); e.className='empty-month'; e.textContent='—';
       block.appendChild(e);
     } else {
-      const byDate={};
-      dayItems.forEach(i=>{const k=i._displayDate||i.date; if(!byDate[k])byDate[k]=[];byDate[k].push(i);});
-      // sort: if manualOrder set use that, else events first → timed → untimed
-      Object.keys(byDate).sort().forEach(ds=>{
-byDate[ds].sort(itemCompare);
+      allDates.forEach(ds=>{
+        if(!showDoneArchive && hiddenDoneDates.includes(ds)) return;
+        byDate[ds].sort(itemCompare);
         block.appendChild(makeDayBlock(ds,byDate[ds]));
       });
     }
@@ -2507,7 +2577,7 @@ async function gFetchCalendar(){
         time: oldItem.time || '',
         _monthBackupTime: oldItem._monthBackupTime || '',
         note: oldItem.note || '',
-        done: getStoredEventDone({type:'event', id:'gev_'+e.id, gId:e.id}, !!oldItem.done),
+        done: getStoredEventDone({type:'event', id:'gev_'+e.id, gId:e.id, recurringEventId:e.recurringEventId||'', rawTitle:oldItem.rawTitle||rawTitle, title:oldItem.title||rawTitle, date:oldItem.date||rawDate}, !!oldItem.done),
         repeat: normalizeRepeatValue(oldItem.repeat || googleRepeat),
         recurrence:e.recurrence || oldItem.recurrence || [],
         pendingDateSync: !!oldItem.pendingDateSync,
@@ -2530,7 +2600,7 @@ async function gFetchCalendar(){
       repeat: normalizeRepeatValue(googleRepeat || oldItem?.repeat),
       recurrence:e.recurrence || oldItem?.recurrence || [],
       // Google Calendar에는 완료 체크 상태가 없어서 웹앱 로컬 상태를 별도 맵에서 보존한다.
-      done: getStoredEventDone({type:'event', id:'gev_'+e.id, gId:e.id}, !!oldItem?.done),
+      done: getStoredEventDone({type:'event', id:'gev_'+e.id, gId:e.id, recurringEventId:e.recurringEventId||'', rawTitle, title:taggedMonth ? stripMonthTag(rawTitle) : rawTitle, date:taggedMonth ? monthKeyFromDate(rawDate) : rawDate}, !!oldItem?.done),
       pendingDateSync: !!oldItem?.pendingDateSync,
       pendingUpdateSync: false,
       monthOnly: oldItem?.pendingDateSync ? !!oldItem.monthOnly : taggedMonth,
@@ -2547,6 +2617,8 @@ async function gFetchCalendar(){
     return newItem;
   });
 
+  // 동기화 직후에도 체크된 Google 일정 상태를 로컬 맵에 다시 저장해 다음 동기화에서 풀리지 않게 한다.
+  mergedEvents.forEach(ev=>{ if(ev.done) setStoredEventDone(ev, true); });
   S.items = [
     ...S.items.filter(i=>i.source!=='google'||i.type!=='event'),
     ...mergedEvents,
