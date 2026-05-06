@@ -2494,6 +2494,8 @@ function plannerRestoreFromFile(input){
         if(Object.prototype.hasOwnProperty.call(data.keys, key)) localStorage.setItem(key, String(data.keys[key]));
         else localStorage.removeItem(key);
       });
+      // 구버전/불완전 백업 파일이어도 reload 때 load()가 pl_items/pl_memos를 지우지 않도록 보정
+      localStorage.setItem('pl_ver', '2');
       showToast('복원 완료 · 새로고침합니다');
       setTimeout(()=>location.reload(), 700);
     }catch(e){
@@ -2597,7 +2599,6 @@ function renderAcctPanel(){
       <div class="acct-email">${G.email}</div>
       <div class="acct-status">구글 캘린더 + Tasks 연동됨</div>
       <button class="acct-action-btn primary" onclick="gSync()">지금 동기화</button>
-      <div class="acct-divider"></div>
       <button class="acct-action-btn secondary" onclick="plannerBackupNow()">백업하기</button>
       <button class="acct-action-btn secondary" onclick="plannerRestoreClick()">복원하기</button>
       <div class="acct-divider"></div>
@@ -2613,10 +2614,7 @@ function renderAcctPanel(){
         <div class="acct-status">구글 계정으로 로그인하면 캘린더 일정과 할일이 자동으로 연동돼요.</div>
         <div class="acct-scope">연동 범위: 캘린더 이벤트, Google Tasks</div>
         <div class="acct-divider"></div>
-        <button class="acct-action-btn primary" onclick="gLogin()">Google로 로그인</button>
-        <div class="acct-divider"></div>
-        <button class="acct-action-btn secondary" onclick="plannerBackupNow()">백업하기</button>
-        <button class="acct-action-btn secondary" onclick="plannerRestoreClick()">복원하기</button>`;
+        <button class="acct-action-btn primary" onclick="gLogin()">Google로 로그인</button>`;
     }
   }
 }
