@@ -189,6 +189,12 @@ body {
 }
 .month-hdr-right .month-hdr-year { order:2; }
 .month-done-toggle:active { opacity:1; transform:scale(0.98); }
+.month-done-toggle.disabled,
+.month-done-toggle:disabled {
+  opacity:0.35;
+  cursor:default;
+  pointer-events:none;
+}
 
 /* month-level items */
 .month-items { padding:4px 0 2px; }
@@ -1705,14 +1711,16 @@ function renderList(autoScroll){
     titleWrap.textContent=MONTHS_EN[m];
     const right=document.createElement('div');
     right.className='month-hdr-right';
-    if(hiddenDoneDates.length){
-      const toggle=document.createElement('button');
-      toggle.className='month-done-toggle';
-      toggle.type='button';
-      toggle.textContent=showDoneArchive?'완료 숨김':'완료 보기';
-      toggle.onclick=(e)=>toggleMonthDoneArchive(S.listYear,m,e);
-      right.appendChild(toggle);
-    }
+    const toggle=document.createElement('button');
+    toggle.className='month-done-toggle' + (hiddenDoneDates.length ? '' : ' disabled');
+    toggle.type='button';
+    toggle.textContent=hiddenDoneDates.length ? (showDoneArchive?'완료 숨김':'완료 보기') : '완료 보기';
+    toggle.disabled=!hiddenDoneDates.length;
+    toggle.onclick=(e)=>{
+      if(!hiddenDoneDates.length) return;
+      toggleMonthDoneArchive(S.listYear,m,e);
+    };
+    right.appendChild(toggle);
     const year=document.createElement('div');
     year.className='month-hdr-year';
     year.textContent=S.listYear;
