@@ -987,6 +987,8 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
   </div>
 </div>
 
+<input type="file" id="backupRestoreInput" accept="application/json,.json" class="hidden" onchange="plannerRestoreFromFile(this)">
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -2421,6 +2423,87 @@ function showToast(msg){
   setTimeout(()=>t.classList.remove('show'),2200);
 }
 
+
+// ── BACKUP / RESTORE ──
+// 웹앱 전용 로컬 상태만 JSON 파일로 백업/복원한다.
+// Google OAuth 토큰은 보안상 백업하지 않는다.
+const PLANNER_BACKUP_KEYS = [
+  'pl_items',
+  'pl_memos',
+  'pl_orderMap',
+  'pl_done_archive_open',
+  'pl_event_done_map_v1',
+  'pl_theme',
+  'pl_ver',
+  'pl_pending_deletes',
+];
+
+function plannerBackupNow(){
+  try{
+    const data = {
+      app:'MyPlanner',
+      version:1,
+      exportedAt:new Date().toISOString(),
+      origin:location.origin,
+      keys:{},
+    };
+    PLANNER_BACKUP_KEYS.forEach(key=>{
+      const value = localStorage.getItem(key);
+      if(value !== null) data.keys[key] = value;
+    });
+
+    const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+    const a = document.createElement('a');
+    const d = new Date();
+    const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}_${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
+    a.href = URL.createObjectURL(blob);
+    a.download = `planner_backup_${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{
+      URL.revokeObjectURL(a.href);
+      try{ document.body.removeChild(a); }catch(e){}
+    }, 0);
+    showToast('백업 파일이 생성됐어요');
+  }catch(e){
+    showToast('백업 실패');
+  }
+}
+
+function plannerRestoreClick(){
+  const input = document.getElementById('backupRestoreInput');
+  if(!input){ showToast('복원 입력창을 찾을 수 없어요'); return; }
+  input.value = '';
+  input.click();
+}
+
+function plannerRestoreFromFile(input){
+  const file = input && input.files && input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(){
+    try{
+      const data = JSON.parse(String(reader.result || ''));
+      if(!data || data.app !== 'MyPlanner' || !data.keys || typeof data.keys !== 'object'){
+        showToast('플래너 백업 파일이 아니에요');
+        return;
+      }
+      if(!confirm('현재 기기의 웹앱 전용 저장값을 백업 파일로 덮어쓸까요?')) return;
+
+      PLANNER_BACKUP_KEYS.forEach(key=>{
+        if(Object.prototype.hasOwnProperty.call(data.keys, key)) localStorage.setItem(key, String(data.keys[key]));
+        else localStorage.removeItem(key);
+      });
+      showToast('복원 완료 · 새로고침합니다');
+      setTimeout(()=>location.reload(), 700);
+    }catch(e){
+      showToast('복원 실패: 파일을 확인해주세요');
+    }
+  };
+  reader.onerror = function(){ showToast('복원 실패: 파일을 읽지 못했어요'); };
+  reader.readAsText(file);
+}
+
 // ── GOOGLE OAUTH ──
 // ⚠️ 여기에 구글 OAuth Client ID를 넣으세요
 // 발급: console.cloud.google.com → 새 프로젝트 → API 및 서비스 → 사용자 인증 정보 → OAuth 2.0 클라이언트 ID
@@ -2515,6 +2598,9 @@ function renderAcctPanel(){
       <div class="acct-status">구글 캘린더 + Tasks 연동됨</div>
       <button class="acct-action-btn primary" onclick="gSync()">지금 동기화</button>
       <div class="acct-divider"></div>
+      <button class="acct-action-btn secondary" onclick="plannerBackupNow()">백업하기</button>
+      <button class="acct-action-btn secondary" onclick="plannerRestoreClick()">복원하기</button>
+      <div class="acct-divider"></div>
       <button class="acct-action-btn secondary" onclick="gDisconnect()">로그아웃</button>`;
   } else {
     dot.className='acct-dot';
@@ -2527,7 +2613,10 @@ function renderAcctPanel(){
         <div class="acct-status">구글 계정으로 로그인하면 캘린더 일정과 할일이 자동으로 연동돼요.</div>
         <div class="acct-scope">연동 범위: 캘린더 이벤트, Google Tasks</div>
         <div class="acct-divider"></div>
-        <button class="acct-action-btn primary" onclick="gLogin()">Google로 로그인</button>`;
+        <button class="acct-action-btn primary" onclick="gLogin()">Google로 로그인</button>
+        <div class="acct-divider"></div>
+        <button class="acct-action-btn secondary" onclick="plannerBackupNow()">백업하기</button>
+        <button class="acct-action-btn secondary" onclick="plannerRestoreClick()">복원하기</button>`;
     }
   }
 }
