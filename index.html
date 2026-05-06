@@ -1,4 +1,4 @@
-<!DOCTYPE html><!-- v20260504_FINAL_STABILIZED_REVIEWED -->
+<!DOCTYPE html><!-- v20260506_COMPLETED_COLLAPSE_EVENT_DONE_REVIEWED_AGAIN -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -1100,6 +1100,19 @@ function removeStoredEventDone(item){
   keys.forEach(key=>delete map[key]);
   saveEventDoneMap(map);
 }
+
+function effectiveDone(item){
+  if(!item) return false;
+  if(item.type === 'event') return getStoredEventDone(item, !!item.done);
+  return !!item.done;
+}
+function restoreStoredEventDoneToItems(){
+  try{
+    (S.items||[]).forEach(item=>{
+      if(item && item.type==='event') item.done = getStoredEventDone(item, !!item.done);
+    });
+  }catch(e){}
+}
 function migrateEventDoneFromItems(){
   // 예전 버전에서 S.items 안의 done 값만 갖고 있던 일정 체크를 새 로컬 맵으로 옮긴다.
   try{
@@ -1120,6 +1133,7 @@ function load(){
     const it=JSON.parse(localStorage.getItem('pl_items')); if(Array.isArray(it)){
       S.items=it.map(item=> item && item.repeat==='lunar' ? {...item, repeat:'yearly'} : item);
       migrateEventDoneFromItems();
+      restoreStoredEventDoneToItems();
     }
     const me=JSON.parse(localStorage.getItem('pl_memos')); if(Array.isArray(me))S.memos=me;
     const om=JSON.parse(localStorage.getItem('pl_orderMap')); if(om&&typeof om==='object')S.orderMap=om;
@@ -1432,7 +1446,9 @@ async function confirmDelete(id){
 
 function makeItemRow(item){
   const row=document.createElement('div');
-  row.className='item-row'+(item.done?' done':'')+(item.type==='event'?' is-event':'');
+  const isDone = effectiveDone(item);
+  if(item.type==='event') item.done = isDone;
+  row.className='item-row'+(isDone?' done':'')+(item.type==='event'?' is-event':'');
   row.dataset.id=item.id;
   row.draggable=!isRangeItem(item);
 
@@ -1444,7 +1460,7 @@ function makeItemRow(item){
   if(isRangeItem(item)){ handle.style.opacity='0.25'; handle.style.cursor='not-allowed'; }
 
   const cb=document.createElement('div');
-  cb.className=`cb ${item.type==='task'?'task-cb':'event-cb'} ${item.done?'checked':''}`;
+  cb.className=`cb ${item.type==='task'?'task-cb':'event-cb'} ${isDone?'checked':''}`;
   cb.onclick=e=>{ e.stopPropagation(); toggleDone(item.id,e); };
   row.appendChild(cb);
 
@@ -1650,7 +1666,7 @@ function monthDoneArchiveKey(y,m){ return `${y}-${String(m+1).padStart(2,'0')}`;
 function isPastFullyDoneDate(ds, items){
   if(!ds || ds >= TODAYSTR) return false;
   if(!items || !items.length) return false;
-  return items.every(i=>!!i.done);
+  return items.every(i=>effectiveDone(i));
 }
 function toggleMonthDoneArchive(y,m,e){
   if(e) e.stopPropagation();
@@ -1662,6 +1678,7 @@ function toggleMonthDoneArchive(y,m,e){
 }
 
 function renderList(autoScroll){
+  restoreStoredEventDoneToItems();
   if(autoScroll!==false){
     const target = getRelevantListTarget();
     if(target && target.year !== S.listYear) S.listYear = target.year;
@@ -2623,6 +2640,7 @@ async function gFetchCalendar(){
     ...S.items.filter(i=>i.source!=='google'||i.type!=='event'),
     ...mergedEvents,
   ];
+  restoreStoredEventDoneToItems();
 }
 
 
