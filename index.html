@@ -1670,16 +1670,31 @@ function scrollToRelevantListTarget(){
 
 
 function monthDoneArchiveKey(y,m){ return `${y}-${String(m+1).padStart(2,'0')}`; }
-function isPastFullyDoneDate(ds, items){
-  if(!ds || ds >= TODAYSTR) return false;
+function isFullyDoneDate(ds, items){
+  if(!ds) return false;
   if(!items || !items.length) return false;
   return items.every(i=>effectiveDone(i));
 }
-function toggleMonthDoneArchive(y,m,e){
+function isPastFullyDoneDate(ds, items){
+  return !!(ds && ds < TODAYSTR && isFullyDoneDate(ds, items));
+}
+function getMonthDoneArchiveMode(y,m){
+  const key=monthDoneArchiveKey(y,m);
+  const val=S.doneArchiveOpen && S.doneArchiveOpen[key];
+  // legacy compatibility: older versions stored boolean true/false.
+  if(val === true) return 'show';
+  if(val === false || val == null) return 'auto';
+  if(val === 'show' || val === 'hide' || val === 'auto') return val;
+  return 'auto';
+}
+function toggleMonthDoneArchive(y,m,e,nextMode){
   if(e) e.stopPropagation();
   const key=monthDoneArchiveKey(y,m);
   S.doneArchiveOpen = S.doneArchiveOpen || {};
-  S.doneArchiveOpen[key] = !S.doneArchiveOpen[key];
+  const mode=getMonthDoneArchiveMode(y,m);
+  // 명시 모드가 있으면 그 모드로 바꾸고, 없으면 기존 show/hide 토글을 유지한다.
+  // auto 상태는 renderList에서 해당 달 상황에 맞게 show 또는 hide를 지정한다.
+  S.doneArchiveOpen[key] = nextMode || ((mode === 'show') ? 'hide' : 'show');
   save();
   renderList(false);
 }
@@ -1703,9 +1718,31 @@ function renderList(autoScroll){
     const byDate={};
     dayItems.forEach(i=>{const k=i._displayDate||i.date; if(!byDate[k])byDate[k]=[];byDate[k].push(i);});
     const allDates=Object.keys(byDate).sort();
-    const hiddenDoneDates=allDates.filter(ds=>isPastFullyDoneDate(ds, byDate[ds]));
-    const archiveKey=monthDoneArchiveKey(S.listYear,m);
-    const showDoneArchive=!!(S.doneArchiveOpen && S.doneArchiveOpen[archiveKey]);
+    const archiveMode=getMonthDoneArchiveMode(S.listYear,m);
+    const autoHiddenDates=allDates.filter(ds=>isPastFullyDoneDate(ds, byDate[ds]));
+    const allDoneDates=allDates.filter(ds=>isFullyDoneDate(ds, byDate[ds]));
+    const hiddenDoneDates=allDates.filter(ds=>{
+      if(archiveMode === 'show') return false;
+      if(archiveMode === 'hide') return isFullyDoneDate(ds, byDate[ds]);
+      return isPastFullyDoneDate(ds, byDate[ds]);
+    });
+    const showDoneArchive=(archiveMode === 'show');
+    let doneToggleText, doneToggleNextMode;
+    if(archiveMode === 'show'){
+      doneToggleText = '완료 숨김';
+      doneToggleNextMode = 'hide';
+    } else if(archiveMode === 'hide'){
+      doneToggleText = '완료 보기';
+      doneToggleNextMode = 'show';
+    } else if(autoHiddenDates.length){
+      // 기본 자동 숨김 상태에서 이미 접힌 완료일이 있으면 버튼은 '보기'가 맞다.
+      doneToggleText = '완료 보기';
+      doneToggleNextMode = 'show';
+    } else {
+      // 접힌 완료일이 없어도 버튼은 항상 활성화한다. 누르면 그 달의 완료일 전체를 숨긴다.
+      doneToggleText = '완료 숨김';
+      doneToggleNextMode = 'hide';
+    }
 
     const titleWrap=document.createElement('div');
     titleWrap.className='month-hdr-name';
@@ -1718,9 +1755,9 @@ function renderList(autoScroll){
     toggle.className='month-done-toggle';
     toggle.type='button';
     toggle.title='완료된 지난 날짜 보기/숨기기';
-    toggle.textContent=showDoneArchive?'완료 숨김':'완료 보기';
+    toggle.textContent=doneToggleText;
     toggle.onclick=(e)=>{
-      toggleMonthDoneArchive(S.listYear,m,e);
+      toggleMonthDoneArchive(S.listYear,m,e,doneToggleNextMode);
     };
     right.appendChild(toggle);
     const year=document.createElement('div');
@@ -1736,15 +1773,21 @@ function renderList(autoScroll){
       monthItems.forEach(item=>mi.appendChild(makeItemRow(item)));
       block.appendChild(mi);
     }
-    if(!dayItems.length&&!monthItems.length){
-      const e=document.createElement('div'); e.className='empty-month'; e.textContent='—';
-      block.appendChild(e);
-    } else {
+    let visibleDayCount = 0;
+    if(dayItems.length){
       allDates.forEach(ds=>{
         if(!showDoneArchive && hiddenDoneDates.includes(ds)) return;
         byDate[ds].sort(itemCompare);
         block.appendChild(makeDayBlock(ds,byDate[ds]));
+        visibleDayCount++;
       });
+    }
+
+    // 날짜 항목이 없거나, 완료된 과거 날짜가 모두 접혀서 현재 보이는 날짜가 없으면
+    // 빈 달과 같은 모양으로 '—'를 보여 월별 레이아웃을 일관되게 유지한다.
+    if(!monthItems.length && visibleDayCount === 0){
+      const e=document.createElement('div'); e.className='empty-month'; e.textContent='—';
+      block.appendChild(e);
     }
     lc.appendChild(block);
   }
