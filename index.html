@@ -193,9 +193,10 @@ body {
 .month-done-toggle:disabled {
   opacity:0.35;
   cursor:default;
-  pointer-events:none;
 }
 
+
+.month-done-toggle { min-width:58px; text-align:center; }
 /* month-level items */
 .month-items { padding:4px 0 2px; }
 .month-items:empty { display:none; }
@@ -1712,12 +1713,13 @@ function renderList(autoScroll){
     const right=document.createElement('div');
     right.className='month-hdr-right';
     const toggle=document.createElement('button');
-    toggle.className='month-done-toggle' + (hiddenDoneDates.length ? '' : ' disabled');
+    // 모든 연도/모든 월헤더에 완료 토글을 항상 표시한다.
+    // 숨길 완료 날짜가 없는 달도 버튼은 보이게 두어 월헤더 UI가 흔들리지 않게 한다.
+    toggle.className='month-done-toggle';
     toggle.type='button';
-    toggle.textContent=hiddenDoneDates.length ? (showDoneArchive?'완료 숨김':'완료 보기') : '완료 보기';
-    toggle.disabled=!hiddenDoneDates.length;
+    toggle.title='완료된 지난 날짜 보기/숨기기';
+    toggle.textContent=showDoneArchive?'완료 숨김':'완료 보기';
     toggle.onclick=(e)=>{
-      if(!hiddenDoneDates.length) return;
       toggleMonthDoneArchive(S.listYear,m,e);
     };
     right.appendChild(toggle);
