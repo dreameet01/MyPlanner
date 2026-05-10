@@ -809,19 +809,37 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
   position:relative;
 }
 .cdp-day.other { color:var(--text3); opacity:0.35; }
-.cdp-day.today::after {
+.cdp-day.today-ref::before,
+.cdp-day.selected::after {
   content:'';
   position:absolute;
+  top:50%;
+  left:50%;
+  transform:translate(-50%,-50%);
   width:30px;
   height:30px;
-  border:1.6px solid var(--month-bg);
   border-radius:50%;
+  pointer-events:none;
+  box-sizing:border-box;
+}
+/* 오늘 날짜는 항상 같은 크기의 연한 회색 채움, 선택된 날짜는 같은 크기의 검정 테두리. */
+.cdp-day.today-ref::before {
+  background:var(--surface2);
+  opacity:0.9;
+  z-index:0;
 }
 .cdp-day.selected {
-  background:var(--month-bg);
-  color:var(--month-fg);
+  color:var(--text);
+  font-weight:700;
 }
-.cdp-day.selected.today::after { border-color:var(--month-fg); }
+.cdp-day.selected::after {
+  border:1.8px solid var(--month-bg);
+  z-index:1;
+}
+.cdp-day-num {
+  position:relative;
+  z-index:2;
+}
 .cdp-foot {
   display:flex;
   gap:8px;
@@ -2314,10 +2332,11 @@ function onFab(){ if(S.curView==='memo')newMemo(); else openModal(); }
 function openModal(){
   pushAppModalState('add');
   document.getElementById('modalOverlay').classList.add('open');
-  document.getElementById('inputDate').value=S.selDate||fmtDs(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate());
+  // 새 일정/할일을 만들 때 날짜 선택창의 기준은 항상 오늘 날짜로 둔다.
+  document.getElementById('inputDate').value=TODAYSTR;
   document.getElementById('inputMonth').value=`${TODAY.getFullYear()}-${String(TODAY.getMonth()+1).padStart(2,'0')}`;
-  document.getElementById('inputStartDate').value=S.selDate||fmtDs(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate());
-  document.getElementById('inputEndDate').value=S.selDate||fmtDs(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate());
+  document.getElementById('inputStartDate').value=TODAYSTR;
+  document.getElementById('inputEndDate').value=TODAYSTR;
   document.getElementById('inputTitle').value='';
   document.getElementById('inputTime').value='';
   document.getElementById('inputNote').value='';
@@ -2439,8 +2458,9 @@ function openEditModal(id){
 function closeEditModal(){ document.getElementById('editModalOverlay').classList.remove('open'); document.getElementById('editBtnEvent').disabled=false; document.getElementById('editBtnTask').disabled=false; document.getElementById('editBtnDateExact').disabled=false; document.getElementById('editBtnDateRange').disabled=false; document.getElementById('editBtnDateMonth').disabled=false; editId=null; }
 function closeEditModalOutside(e){ if(e.target===document.getElementById('editModalOverlay')) closeEditModal(); }
 function setEditDateMode(mode){
-  const item = editId ? S.items.find(i=>i.id===editId) : null;
-  if((mode==='month'||mode==='range') && (S._editType==='task' || item?.type==='task')){
+  // 날짜 모드 제한은 '현재 편집 화면에서 선택된 타입'만 기준으로 판단한다.
+  // 기존 항목이 할일이었더라도, 사용자가 일정으로 바꾼 뒤에는 기간/이달 중에 선택이 가능해야 한다.
+  if((mode==='month'||mode==='range') && S._editType==='task'){
     showToast(mode==='range'?'할일은 기간 일정으로 바꿀 수 없어요':'할일은 이달 중에로 바꿀 수 없어요');
     mode='exact';
   }
@@ -2529,9 +2549,18 @@ function saveEditItem(){
   item.note = document.getElementById('editNote').value.trim();
   item.repeat = (item.type==='event' && !item.isRange) ? normalizeRepeatValue(editRepeat) : 'none';
   save(); closeEditModal(); renderAll(); showToast('Updated');
-  // push to Google. 토큰 만료/오프라인이면 pending으로 보존하고 다음 동기화 때 재시도.
-  if(item.gId) gPushFullUpdate(item);
-  else gPushCreateItem(item);
+  // push to Google. 타입이 바뀐 Google 연동 항목은 기존 원본을 먼저 삭제 큐에 넣고, 새 타입으로 다시 생성한다.
+  // 가능하면 즉시 삭제→생성을 순서대로 처리해서 다음 동기화 전 중복 표시 가능성을 줄인다.
+  if(typeChanged && oldGId){
+    (async()=>{
+      if(await gEnsureConnected()) await gFlushPendingDeletes();
+      await gPushCreateItem(item);
+    })();
+  } else if(item.gId) {
+    gPushFullUpdate(item);
+  } else {
+    gPushCreateItem(item);
+  }
 }
 async function deleteEditItem(){
   if(!editId) return;
@@ -3353,6 +3382,7 @@ async function gDeleteTask(gId, gListId){
 let cdpTargetId = null;
 let cdpYear = TODAY.getFullYear();
 let cdpMonth = TODAY.getMonth();
+let cdpMode = 'add';
 
 function cdpParseInputDate(value){
   const d = parseDs(value);
@@ -3361,6 +3391,7 @@ function cdpParseInputDate(value){
 function cdpOpenForInput(input){
   if(!input) return;
   cdpTargetId = input.id;
+  cdpMode = String(input.id || '').startsWith('edit') ? 'edit' : 'add';
   const d = cdpParseInputDate(input.value);
   cdpYear = d.getFullYear();
   cdpMonth = d.getMonth();
@@ -3370,6 +3401,7 @@ function cdpOpenForInput(input){
 function cdpClose(){
   document.getElementById('customDatePicker')?.classList.remove('open');
   cdpTargetId = null;
+  cdpMode = 'add';
 }
 function cdpMoveMonth(delta){
   cdpMonth += delta;
@@ -3407,8 +3439,10 @@ function renderCustomDatePicker(){
     const realYear = c.y + Math.floor(c.m / 12);
     const ds = fmtDs(realYear, realMonth, c.d);
     const btn = document.createElement('div');
-    btn.className = 'cdp-day' + (c.other?' other':'') + (ds===TODAYSTR?' today':'') + (ds===selected?' selected':'');
-    btn.textContent = c.d;
+    const isSelected = ds === selected;
+    const showTodayRef = ds === TODAYSTR;
+    btn.className = 'cdp-day' + (c.other?' other':'') + (showTodayRef?' today-ref':'') + (isSelected?' selected':'');
+    btn.innerHTML = `<span class="cdp-day-num">${c.d}</span>`;
     btn.onclick = () => cdpSetDate(ds);
     days.appendChild(btn);
   });
@@ -3429,10 +3463,9 @@ function initCustomDatePicker(){
     const picker = document.getElementById('customDatePicker');
     if(!picker || !picker.classList.contains('open')) return;
     if(e.target.closest('#customDatePicker')) return;
-    if(e.target.closest('#modalOverlay') || e.target.closest('#editModalOverlay')){
-      if(e.target.matches('input')) return;
-      if(e.target.closest('input')) return;
-    }
+    const dateInputIds = ['inputDate','inputStartDate','inputEndDate','editDate','editStartDate','editEndDate'];
+    if(dateInputIds.some(id=>e.target.closest('#'+id))) return;
+    cdpClose();
   });
 }
 
