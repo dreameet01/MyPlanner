@@ -267,6 +267,8 @@ body {
   letter-spacing:-1px; margin-top:1px;
 }
 .more-btn:hover { color:var(--text2); }
+.more-btn.has-note { color:#1a1a1a !important; }
+
 .cb {
   width:12px; height:12px; flex-shrink:0;
   display:flex; align-items:center; justify-content:center; cursor:pointer;
@@ -746,6 +748,102 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
 .acct-scope {
   font-size:11px; color:var(--text3); line-height:1.6;
 }
+
+/* ─── CUSTOM DATE PICKER: today circle ─── */
+.custom-date-picker {
+  position:fixed;
+  left:50%;
+  bottom:0;
+  transform:translateX(-50%);
+  width:100%;
+  max-width:480px;
+  background:var(--bg);
+  border-top:1px solid var(--border);
+  border-radius:16px 16px 0 0;
+  box-shadow:0 -8px 24px rgba(0,0,0,0.12);
+  padding:14px 14px 22px;
+  z-index:420;
+  display:none;
+}
+.custom-date-picker.open { display:block; }
+.cdp-head {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin-bottom:10px;
+}
+.cdp-title {
+  font-family:'SF Mono','Consolas',monospace;
+  font-size:15px;
+  color:var(--text);
+}
+.cdp-nav {
+  background:none;
+  border:none;
+  color:var(--text2);
+  font-size:22px;
+  padding:4px 10px;
+  cursor:pointer;
+}
+.cdp-week, .cdp-days {
+  display:grid;
+  grid-template-columns:repeat(7,1fr);
+}
+.cdp-wd {
+  text-align:center;
+  font-family:'SF Mono','Consolas',monospace;
+  font-size:9px;
+  color:var(--text3);
+  padding:7px 0;
+}
+.cdp-day {
+  height:38px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-family:'SF Mono','Consolas',monospace;
+  font-size:13px;
+  color:var(--text);
+  border-radius:50%;
+  cursor:pointer;
+  position:relative;
+}
+.cdp-day.other { color:var(--text3); opacity:0.35; }
+.cdp-day.today::after {
+  content:'';
+  position:absolute;
+  width:30px;
+  height:30px;
+  border:1.6px solid var(--month-bg);
+  border-radius:50%;
+}
+.cdp-day.selected {
+  background:var(--month-bg);
+  color:var(--month-fg);
+}
+.cdp-day.selected.today::after { border-color:var(--month-fg); }
+.cdp-foot {
+  display:flex;
+  gap:8px;
+  margin-top:12px;
+}
+.cdp-foot button {
+  flex:1;
+  padding:10px;
+  border-radius:8px;
+  border:1px solid var(--border2);
+  background:var(--surface2);
+  color:var(--text);
+  font-family:'SF Mono','Consolas',monospace;
+  font-size:11px;
+  cursor:pointer;
+}
+.cdp-foot .primary {
+  background:var(--month-bg);
+  color:var(--month-fg);
+  border-color:var(--month-bg);
+}
+
 </style>
 </head>
 <body data-theme="gray">
@@ -984,6 +1082,25 @@ mark { background:var(--surface2); color:var(--text); border-radius:2px; padding
       <button class="form-submit" style="background:var(--sun);flex:1" onclick="deleteEditItem()">Delete</button>
       <button class="form-submit" style="flex:2" onclick="saveEditItem()">Save</button>
     </div>
+  </div>
+</div>
+
+
+<!-- CUSTOM DATE PICKER -->
+<div class="custom-date-picker" id="customDatePicker">
+  <div class="cdp-head">
+    <button class="cdp-nav" type="button" onclick="cdpMoveMonth(-1)">‹</button>
+    <div class="cdp-title" id="cdpTitle"></div>
+    <button class="cdp-nav" type="button" onclick="cdpMoveMonth(1)">›</button>
+  </div>
+  <div class="cdp-week">
+    <div class="cdp-wd">SUN</div><div class="cdp-wd">MON</div><div class="cdp-wd">TUE</div>
+    <div class="cdp-wd">WED</div><div class="cdp-wd">THU</div><div class="cdp-wd">FRI</div><div class="cdp-wd">SAT</div>
+  </div>
+  <div class="cdp-days" id="cdpDays"></div>
+  <div class="cdp-foot">
+    <button type="button" onclick="cdpPickToday()">Today</button>
+    <button class="primary" type="button" onclick="cdpClose()">Done</button>
   </div>
 </div>
 
@@ -1510,7 +1627,7 @@ function makeItemRow(item){
   row.appendChild(main);
 
   const more=document.createElement('button');
-  more.className='more-btn';
+  more.className='more-btn' + ((item.note||'').trim() ? ' has-note' : '');
   more.type='button';
   more.textContent='⋯';
   more.title='수정';
@@ -2311,9 +2428,8 @@ function openEditModal(id){
   document.getElementById('editTime').value = (item.monthOnly || item.isRange) ? '' : (item.time||'');
   document.getElementById('editNote').value = item.note||'';
   setEditType(item.type);
-  const lockType = !!item.gId;
-  document.getElementById('editBtnEvent').disabled = lockType;
-  document.getElementById('editBtnTask').disabled = lockType;
+  document.getElementById('editBtnEvent').disabled = false;
+  document.getElementById('editBtnTask').disabled = false;
   setEditDateMode(item.isRange ? 'range' : (item.monthOnly ? 'month' : 'exact'));
   // 반복 일정이면 편집창을 열 때 반드시 매월/매년 버튼 상태가 실제 데이터와 일치해야 한다.
   applyEditRepeatUI(item);
@@ -2350,10 +2466,6 @@ function updateEditRepeatAvailability(){
 }
 function setEditType(t){
   const current = editId ? S.items.find(i=>i.id===editId) : null;
-  if(current?.gId && current.type!==t){
-    showToast('Google 연동 항목은 일정/할일 타입을 바꿀 수 없어요');
-    t = current.type;
-  }
   document.getElementById('editBtnEvent').classList.toggle('active', t==='event');
   document.getElementById('editBtnTask').classList.toggle('active', t==='task');
   S._editType = t;
@@ -2392,8 +2504,19 @@ function saveEditItem(){
   if(!title){ showToast('제목을 입력해주세요'); return; }
   if(!date || (isRange && !endDate)){ showToast('날짜를 입력해주세요'); return; }
   if(isRange && endDate < date){ showToast('종료일이 시작일보다 빠릅니다'); return; }
+  const oldType = item.type;
+  const oldGId = item.gId;
+  const oldGListId = item.gListId || '';
   item.title = title;
   item.type = S._editType || item.type;
+  const typeChanged = oldType !== item.type;
+  if(typeChanged && oldGId){
+    queuePendingDelete({type:oldType, gId:oldGId, gListId:oldGListId});
+    delete item.gId;
+    delete item.gListId;
+    item.source = 'local';
+    item.pendingCreateSync = true;
+  }
   if(isRange && item.type==='event'){
     item.monthOnly=false; item.isRange=true; item.date=date; item.endDate=endDate; item.time=''; item.repeat='none';
   } else if(isMonth && item.type==='event'){
@@ -3225,6 +3348,94 @@ async function gDeleteTask(gId, gListId){
 }
 
 
+
+// ── CUSTOM DATE PICKER ──
+let cdpTargetId = null;
+let cdpYear = TODAY.getFullYear();
+let cdpMonth = TODAY.getMonth();
+
+function cdpParseInputDate(value){
+  const d = parseDs(value);
+  return d || parseDs(TODAYSTR);
+}
+function cdpOpenForInput(input){
+  if(!input) return;
+  cdpTargetId = input.id;
+  const d = cdpParseInputDate(input.value);
+  cdpYear = d.getFullYear();
+  cdpMonth = d.getMonth();
+  renderCustomDatePicker();
+  document.getElementById('customDatePicker')?.classList.add('open');
+}
+function cdpClose(){
+  document.getElementById('customDatePicker')?.classList.remove('open');
+  cdpTargetId = null;
+}
+function cdpMoveMonth(delta){
+  cdpMonth += delta;
+  if(cdpMonth < 0){ cdpMonth = 11; cdpYear--; }
+  if(cdpMonth > 11){ cdpMonth = 0; cdpYear++; }
+  renderCustomDatePicker();
+}
+function cdpSetDate(ds){
+  const input = cdpTargetId ? document.getElementById(cdpTargetId) : null;
+  if(input){
+    input.value = ds;
+    input.dispatchEvent(new Event('input', {bubbles:true}));
+    input.dispatchEvent(new Event('change', {bubbles:true}));
+  }
+  cdpClose();
+}
+function cdpPickToday(){ cdpSetDate(TODAYSTR); }
+function renderCustomDatePicker(){
+  const title = document.getElementById('cdpTitle');
+  const days = document.getElementById('cdpDays');
+  if(!title || !days) return;
+  title.textContent = `${MONTHS_EN[cdpMonth]} ${cdpYear}`;
+  days.innerHTML = '';
+  const selected = cdpTargetId ? document.getElementById(cdpTargetId)?.value : '';
+  const first = new Date(cdpYear, cdpMonth, 1);
+  const startDay = first.getDay();
+  const dim = new Date(cdpYear, cdpMonth + 1, 0).getDate();
+  const prevDim = new Date(cdpYear, cdpMonth, 0).getDate();
+  const cells = [];
+  for(let i=startDay-1;i>=0;i--) cells.push({d:prevDim-i, m:cdpMonth-1, y:cdpYear, other:true});
+  for(let d=1; d<=dim; d++) cells.push({d, m:cdpMonth, y:cdpYear, other:false});
+  while(cells.length % 7 !== 0) cells.push({d:cells.length-dim-startDay+1, m:cdpMonth+1, y:cdpYear, other:true});
+  cells.forEach(c=>{
+    const realMonth = ((c.m % 12) + 12) % 12;
+    const realYear = c.y + Math.floor(c.m / 12);
+    const ds = fmtDs(realYear, realMonth, c.d);
+    const btn = document.createElement('div');
+    btn.className = 'cdp-day' + (c.other?' other':'') + (ds===TODAYSTR?' today':'') + (ds===selected?' selected':'');
+    btn.textContent = c.d;
+    btn.onclick = () => cdpSetDate(ds);
+    days.appendChild(btn);
+  });
+}
+function initCustomDatePicker(){
+  const ids = ['inputDate','inputStartDate','inputEndDate','editDate','editStartDate','editEndDate'];
+  ids.forEach(id=>{
+    const input = document.getElementById(id);
+    if(!input) return;
+    try{ input.type = 'text'; }catch(e){}
+    input.inputMode = 'none';
+    input.readOnly = true;
+    input.placeholder = 'YYYY-MM-DD';
+    input.addEventListener('click', e=>{ e.preventDefault(); cdpOpenForInput(input); });
+    input.addEventListener('focus', e=>{ e.preventDefault(); cdpOpenForInput(input); });
+  });
+  document.addEventListener('click', e=>{
+    const picker = document.getElementById('customDatePicker');
+    if(!picker || !picker.classList.contains('open')) return;
+    if(e.target.closest('#customDatePicker')) return;
+    if(e.target.closest('#modalOverlay') || e.target.closest('#editModalOverlay')){
+      if(e.target.matches('input')) return;
+      if(e.target.closest('input')) return;
+    }
+  });
+}
+
 // ── INIT ──
 window.addEventListener('load', function() {
   initBackGuard();
@@ -3237,6 +3448,7 @@ window.addEventListener('load', function() {
   switchView('list');
   initCalSwipe();
   initYearSwipe();
+  initCustomDatePicker();
 
   // 토큰이 만료되어도 Google 로그인 세션이 살아있으면 조용히 새 토큰을 받아 계속 로그인처럼 유지
   if(G.email && !isGConnected()){
